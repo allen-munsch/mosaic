@@ -1,0 +1,64 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'semantic-fabric'
+    environment: 'production'
+
+# Alertmanager configuration (optional)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - alertmanager:9093
+
+# Load rules once and periodically evaluate them
+# rule_files:
+#   - "alert_rules.yml"
+
+scrape_configs:
+  # Coordinator node metrics
+  - job_name: 'coordinator'
+    static_configs:
+      - targets: ['coordinator:4040']
+        labels:
+          node_type: 'coordinator'
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Worker node metrics
+  - job_name: 'workers'
+    static_configs:
+      - targets: 
+        - 'worker-1:4041'
+        - 'worker-2:4042'
+        labels:
+          node_type: 'worker'
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Redis metrics (using redis_exporter if deployed)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+    scrape_interval: 30s
+
+  # Nginx metrics
+  - job_name: 'nginx'
+    static_configs:
+      - targets: ['nginx:80']
+    metrics_path: '/status'
+    scrape_interval: 30s
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Node exporter (for system metrics if deployed)
+  # - job_name: 'node'
+  #   static_configs:
+  #     - targets:
+  #       - 'coordinator:9100'
+  #       - 'worker-1:9100'
+  #       - 'worker-2:9100'

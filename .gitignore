@@ -1,0 +1,47 @@
+/_build/
+/deps/
+*.ez
+.elixir_ls/
+.env
+/data/
+# Elixir / Mix
+/_build
+/deps
+/erl_crash.dump
+*.ez
+
+# Release artifacts
+/_rel
+/releases
+
+# Config files (if you store secrets locally)
+config/dev.secret.exs
+config/prod.secret.exs
+
+# Editor / OS files
+*.swp
+*.swo
+*.DS_Store
+*.bak
+*.tmp
+.idea/
+.vscode/
+*.iml
+
+# Logs
+/log
+/logs
+/*.log
+
+# Test coverage
+/cover
+/coveralls
+/test/*.coverdata
+/test/*.cover
+/test/*.eex~
+/test/tmp
+
+# Node / assets (if Phoenix / JS assets exist)
+/node_modules
+/assets/node_modules
+/assets/_build

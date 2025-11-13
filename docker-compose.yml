@@ -1,0 +1,7 @@
+services:
+  mosaic:
+    build: .
+    ports:
+      - "4040:4040"
+    environment:
+      - PORT=4040
