@@ -1,6 +1,6 @@
 # MosaicDB
 
-Distributed semantic search built on SQLite shards.
+Distributed semantic search built on SQLite shards ( a sketch )
 
 ## Setup
 
@@ -16,6 +16,10 @@ Done. Go to http://localhost/health
 Takes queries, searches across SQLite database shards, returns ranked results.
 
 Each shard = immutable SQLite file with documents, vectors, and PageRank scores.
+
+This is a system for performing semantic search across many distributed chunks of data (shards) using embedding-based vector search (via sqlite-vss) and then ranking the results.
+
+All in a federated/distributed way, inspired by scalable distributed systems like Riak.
 
 ## Services
 
