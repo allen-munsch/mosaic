@@ -21,3 +21,9 @@ Approximate search for large embeddings: For very large datasets, consider HNSW 
 Shard versioning: Explicit versioning of shards could simplify updates without breaking immutability.
 
 More API endpoints: Filtering, faceted search, pagination, and batch queries could make MosaicDB more production-ready.
+
+Centroid routing accuracy: A single centroid for 10K documents is a coarse approximation. If a shard contains semantically diverse content (common in real data), relevant documents might be missed because the centroid doesn't match the query well. Have you considered multiple centroids per shard, or hierarchical clustering?
+Update/deletion story is missing: With immutable shards, how do you handle document updates or deletions? Tombstones? Compaction? This becomes important at scale.
+Several components are stubs: PageRankComputer, CrawlerPipeline, CircuitBreaker, URLFrontier all just return empty state. The architecture is there, but key functionality isn't implemented.
+sqlite-vss at claimed scale: The docs claim 100M+ document capacity. sqlite-vss is excellent for moderate scale, but I'd want to see benchmarks validating this—especially around index build time and memory pressure.
+Shard rebalancing: What happens when you add workers? The docs mention "elastic sharding" but I don't see the implementation for redistributing existing shards.

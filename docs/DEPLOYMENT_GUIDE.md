@@ -162,7 +162,7 @@ semantic-fabric/
 ### Scalability
 - **Shards per worker**: 10,000+
 - **Documents per shard**: 10,000
-- **Total capacity**: 100M+ documents (10 workers)
+- **Total capacity**: Goal 100M+ documents (10 workers), search engine like capacity
 - **Horizontal scaling**: Linear to ~50 workers
 
 ### Resource Usage
