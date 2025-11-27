@@ -1,7 +1,3 @@
-Based on what we've built and the vision in the document, here's a comprehensive roadmap:
-
----
-
 # MosaicDB: Distributed Semantic Metadata Engine
 ## Project Plan & Roadmap
 
