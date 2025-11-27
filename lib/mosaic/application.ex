@@ -1,57 +1,80 @@
-defmodule Mosaic.Search do
-  def search(query) do
-    [%{id: 1, text: "Result for #{query}"}]
-  end
-end
-
-defmodule Mosaic.WebApplication do
+defmodule Mosaic.Application do
   use Application
   require Logger
 
+  @moduledoc """
+  Enhanced Fractal SQLite Vector Semantic Fabric
+  
+  Key improvements:
+  - Hierarchical shard routing with bloom filters
+  - Adaptive batch sizing for embeddings
+  - Connection pooling for SQLite operations
+  - Smart caching with LRU eviction
+  - Health monitoring and auto-recovery
+  """
+
   def start(_type, _args) do
-    port = System.get_env("PORT", "4040") |> String.to_integer()
-    Logger.info("Starting Mosaic on port #{port}")
+    Logger.info("Starting Mosaic: Enhanced Fractal SQLite Vector Semantic Fabric")
     
     children = [
-      {Plug.Cowboy, scheme: :http, plug: Mosaic.Router, options: [port: port]}
+      # Core coordination
+      {Cluster.Supervisor, [topologies(), [name: Mosaic.ClusterSupervisor]]},
+      
+      # Storage layer
+      {Mosaic.Config, []},
+      {Mosaic.StorageManager, []},
+      {Mosaic.ConnectionPool, []},
+      
+      # Routing and indexing
+      {Mosaic.ShardRouter, []},
+      {Mosaic.BloomFilterManager, []},
+      {Mosaic.RoutingMaintenance, []},
+      
+      # Embedding services
+      {Mosaic.EmbeddingService, []},
+      {Mosaic.EmbeddingCache, []},
+      
+      # Query execution
+      {Mosaic.QueryEngine, []},
+      {Mosaic.CircuitBreaker, []},
+      
+      # Crawling pipeline
+      {Mosaic.CrawlerSupervisor, []},
+      {Mosaic.URLFrontier, []},
+      {Mosaic.CrawlerPipeline, []},
+      
+      # PageRank computation
+      {Mosaic.PageRankComputer, []},
+      
+      # Monitoring
+      {Mosaic.Telemetry, []},
+      {Mosaic.HealthCheck, []},
+      
+      # API
+      {Plug.Cowboy, scheme: :http, plug: Mosaic.API, options: [port: get_port()]}
     ]
 
-    Supervisor.start_link(children, strategy: :one_for_one, name: Mosaic.Supervisor)
-  end
-end
-
-defmodule Mosaic.Router do
-  use Plug.Router
-  
-  plug Plug.Logger
-  plug :match
-  plug :dispatch
-
-  get "/health" do
-    send_resp(conn, 200, "healthy\n")
+    opts = [strategy: :one_for_one, name: Mosaic.Supervisor]
+    Logger.info("Starting supervisor with #{length(children)} children...")
+    Supervisor.start_link(children, opts)
   end
 
-  get "/api/status" do
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(200, Jason.encode!(%{
-      status: "ok",
-      version: "0.1.0",
-      name: "Mosaic",
-      tagline: "Fractal intelligence, assembled"
-    }))
+  defp topologies do
+    [
+      semantic_fabric: [
+        strategy: Cluster.Strategy.Gossip,
+        config: [
+          port: 45892,
+          if_addr: "0.0.0.0",
+          multicast_addr: "230.1.1.251",
+          multicast_ttl: 1,
+          secret: System.get_env("CLUSTER_SECRET", "semantic-fabric-secret")
+        ]
+      ]
+    ]
   end
 
-  post "/search" do
-    query = conn.body_params["query"]
-    results = Mosaic.Search.search(query)
-    
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(200, Jason.encode!(results))
-  end
-
-  match _ do
-    send_resp(conn, 404, "Not found\n")
+  defp get_port do
+    System.get_env("PORT", "4040") |> String.to_integer()
   end
 end

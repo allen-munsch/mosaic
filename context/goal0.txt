@@ -1,0 +1,310 @@
+# MosaicDB Project Plan
+
+## Building a Distributed Semantic Search Engine on SQLite Shards
+
+---
+
+## Phase 1: Foundation
+
+### 1.1 Project Setup
+- Initialize Elixir project with Mix
+- Set up Docker environment (Dockerfile, docker-compose)
+- Configure Nginx as reverse proxy/load balancer
+- Add Redis for caching layer
+- Set up Prometheus + Grafana for observability
+- Create basic Makefile for common operations
+
+### 1.2 Core Dependencies
+- **Exqlite** — SQLite3 bindings for Elixir
+- **sqlite-vss** — Vector similarity search extension for SQLite
+- **Plug/Cowboy** — HTTP server
+- **libcluster** — Erlang node clustering
+- **Req** — HTTP client for external API calls
+- **Jason** — JSON encoding/decoding
+
+### 1.3 Configuration Management
+- Environment-based configuration (dev/prod)
+- Runtime configuration for paths, limits, thresholds
+- Directory structure setup (shards, routing index, cache)
+
+---
+
+## Phase 2: Storage Layer
+
+### 2.1 SQLite Shard Design
+- Design shard schema: documents table, vectors table, metadata
+- Decide on shard sizing strategy (documents per shard)
+- Implement shard creation with sqlite-vss extension loaded
+- Configure SQLite pragmas for performance (WAL mode, mmap, cache size)
+
+### 2.2 Storage Manager
+- Shard lifecycle management (create, open, close, archive)
+- Shard immutability model — write once, read many
+- Shard file naming convention and path resolution
+- Corruption detection and recovery
+
+### 2.3 Connection Pooling
+- Pool of read-only connections per shard
+- Connection checkout/checkin mechanism
+- Idle connection cleanup
+- Handle connection failures gracefully
+
+---
+
+## Phase 3: Embedding Pipeline
+
+### 3.1 Embedding Service Architecture
+- Support multiple backends (local, OpenAI, HuggingFace)
+- Batched embedding generation for throughput
+- Configurable embedding dimensions
+- Timeout and retry handling
+
+### 3.2 Embedding Cache
+- LRU eviction strategy
+- Hash-based cache keys (SHA256 of text)
+- Configurable cache size limits
+- Cache hit/miss metrics
+
+### 3.3 Batch Processing
+- Request queuing with configurable batch size
+- Batch timeout to prevent starvation
+- Async processing with caller notification
+
+---
+
+## Phase 4: Routing & Indexing
+
+### 4.1 Shard Router Design
+- Central routing database (separate SQLite file)
+- Shard metadata table: id, path, doc count, query count, status
+- Shard centroid table: precomputed centroid vector per shard
+- Indexes for fast lookup by status and access patterns
+
+### 4.2 Centroid-Based Routing
+- Compute centroid vector for each shard (average of document vectors)
+- Store centroid norm for fast cosine similarity
+- Route queries to shards with similar centroids
+- Configurable minimum similarity threshold
+
+### 4.3 Bloom Filter Integration
+- Generate bloom filter per shard from document terms
+- Store serialized bloom filters in routing DB
+- Use bloom filters for keyword pre-filtering
+- Reduce candidate shards before vector search
+
+### 4.4 Hot Shard Caching
+- Preload frequently-accessed shard metadata into memory
+- Track query counts and last access times
+- LRU eviction for shard cache
+- Background refresh of cache statistics
+
+---
+
+## Phase 5: Query Engine
+
+### 5.1 Query Processing Pipeline
+1. Receive query text
+2. Generate query embedding
+3. Find candidate shards (centroid similarity + bloom filter)
+4. Fan out to candidate shards in parallel
+5. Collect and merge results
+6. Re-rank by combined score
+7. Return top-k results
+
+### 5.2 Parallel Shard Search
+- Task-based parallel execution
+- Configurable timeout per shard
+- Partial results on timeout (don't fail entire query)
+- Circuit breaker per shard to handle failures
+
+### 5.3 Result Merging & Ranking
+- Combine vector similarity scores from shards
+- Apply PageRank boost to results
+- Deduplicate results across shards
+- Sort by final combined score
+
+### 5.4 Query Caching
+- Cache full query results in Redis
+- Cache key based on query embedding hash
+- TTL-based expiration
+- Cache invalidation strategy
+
+---
+
+## Phase 6: Fault Tolerance
+
+### 6.1 Circuit Breaker Pattern
+- Track failure count per downstream dependency
+- States: closed (normal), open (failing), half-open (testing)
+- Configurable failure threshold to trip circuit
+- Configurable success threshold to close circuit
+- Timeout before transitioning from open to half-open
+
+### 6.2 Graceful Degradation
+- Return partial results when some shards fail
+- Fallback to cached results when fresh query fails
+- Health status in API responses
+- Client-visible degradation indicators
+
+---
+
+## Phase 7: Crawler Pipeline
+
+### 7.1 URL Frontier
+- Priority queue for URLs to crawl
+- Per-domain politeness delays
+- URL deduplication (already crawled, already queued)
+- Depth limiting
+- Domain-based rate limiting
+
+### 7.2 Crawler Workers
+- Supervised worker pool
+- Fetch → Parse → Extract → Store pipeline
+- Respect robots.txt
+- Handle redirects, errors, timeouts
+- Extract links for frontier
+
+### 7.3 Document Processing
+- HTML parsing and text extraction
+- Metadata extraction (title, description, headers)
+- Link extraction and normalization
+- Generate embeddings for document
+- Assign to appropriate shard
+
+### 7.4 Crawler Supervisor
+- Dynamic worker pool sizing
+- Worker restart on crash
+- Backpressure when frontier is empty
+- Crawl rate configuration
+
+---
+
+## Phase 8: PageRank Computation
+
+### 8.1 Link Graph Storage
+- Store outbound links per document
+- Build adjacency list representation
+- Handle dangling nodes (no outlinks)
+
+### 8.2 PageRank Algorithm
+- Iterative power method implementation
+- Configurable damping factor (default 0.85)
+- Convergence threshold or max iterations
+- Normalize scores to sum to 1.0
+
+### 8.3 Scheduled Recomputation
+- Background job on configurable interval
+- Incremental updates vs full recomputation
+- Store PageRank scores in shard documents
+- Update without blocking queries
+
+---
+
+## Phase 9: Clustering & Distribution
+
+### 9.1 Node Discovery
+- Gossip-based cluster formation (libcluster)
+- Multicast for local network discovery
+- Shared secret for cluster membership
+- Handle node join/leave events
+
+### 9.2 Shard Distribution
+- Assign shard ranges to worker nodes
+- Consistent hashing for shard placement
+- Rebalancing on node changes
+- Shard replication factor (optional)
+
+### 9.3 Distributed Query Coordination
+- Coordinator routes to appropriate workers
+- Workers own specific shard ranges
+- Scatter-gather query pattern
+- Handle worker failures mid-query
+
+---
+
+## Phase 10: API & Observability
+
+### 10.1 HTTP API
+- `GET /health` — Health check endpoint
+- `POST /api/search` — Search endpoint
+- `POST /api/index` — Document indexing (if not crawl-only)
+- Request validation and error responses
+- Rate limiting
+
+### 10.2 Telemetry & Metrics
+- Search latency histograms
+- Shard query counts
+- Cache hit/miss ratios
+- Embedding generation times
+- Circuit breaker state changes
+- Crawler throughput
+
+### 10.3 Health Monitoring
+- Periodic self-health checks
+- Check router, embeddings, storage, memory
+- Expose health status via API
+- Alert on degraded state
+
+### 10.4 Dashboards
+- Grafana dashboards for key metrics
+- Query latency percentiles
+- Throughput over time
+- Error rates by component
+- Resource utilization
+
+---
+
+## Phase 11: Production Hardening
+
+### 11.1 Performance Tuning
+- SQLite pragma optimization
+- Connection pool sizing
+- Batch size tuning for embeddings
+- Cache size optimization
+- Query timeout tuning
+
+### 11.2 Operational Concerns
+- Log aggregation setup
+- Backup strategy for shards
+- Shard archival for old/cold data
+- Deployment automation
+- Rolling restart procedures
+
+### 11.3 Documentation
+- Architecture documentation
+- Deployment guide
+- API documentation
+- Runbook for common operations
+- Troubleshooting guide
+
+---
+
+## Milestone Summary
+
+| Phase | Milestone | Key Deliverable |
+|-------|-----------|-----------------|
+| 1 | Foundation | Running Elixir app with Docker |
+| 2 | Storage | Create and query single SQLite shard |
+| 3 | Embeddings | Generate and cache vector embeddings |
+| 4 | Routing | Route queries to relevant shards |
+| 5 | Query Engine | End-to-end semantic search working |
+| 6 | Fault Tolerance | System handles failures gracefully |
+| 7 | Crawler | Automatically ingest web content |
+| 8 | PageRank | Rank results by link authority |
+| 9 | Distribution | Scale across multiple nodes |
+| 10 | Observability | Metrics, dashboards, health checks |
+| 11 | Production | Ready for real workloads |
+
+---
+
+## Suggested Build Order
+
+**MVP (Phases 1-5):** Get basic semantic search working on a single node with manual document ingestion.
+
+**Resilience (Phase 6):** Add fault tolerance before scaling.
+
+**Content (Phases 7-8):** Automate content acquisition and improve ranking.
+
+**Scale (Phase 9):** Distribute across nodes when single-node capacity is exceeded.
+
+**Operate (Phases 10-11):** Add observability and harden for production.

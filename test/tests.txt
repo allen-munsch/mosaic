@@ -1,0 +1,103 @@
+## Test Modules & Test Names
+
+```
+test/
+├── mosaic/
+│   ├── api_test.exs
+│   ├── application_test.exs
+│   ├── circuit_breaker_test.exs
+│   ├── crawler_pipeline_test.exs
+│   ├── crawler_supervisor_test.exs
+│   ├── pagerank_computer_test.exs
+│   ├── query_engine_test.exs
+│   ├── routing_maintenance_test.exs
+│   ├── storage_manager_test.exs
+│   ├── telemetry_test.exs
+│   └── url_frontier_test.exs
+├── integration/
+│   └── search_flow_test.exs
+└── test_helper.exs
+```
+
+---
+
+### `api_test.exs`
+- `test "GET /health returns 200 OK"`
+- `test "POST /api/search with valid query returns results"`
+- `test "POST /api/search with empty query returns error"`
+- `test "POST /api/search with invalid JSON returns 400"`
+- `test "returns proper content-type header"`
+
+### `circuit_breaker_test.exs`
+- `test "allows requests when circuit is closed"`
+- `test "opens circuit after threshold failures"`
+- `test "rejects requests when circuit is open"`
+- `test "transitions to half-open after timeout"`
+- `test "closes circuit after successful request in half-open state"`
+- `test "reopens circuit on failure in half-open state"`
+
+### `crawler_pipeline_test.exs`
+- `test "fetches and parses HTML content"`
+- `test "extracts links from page"`
+- `test "generates embeddings for document"`
+- `test "handles fetch timeout gracefully"`
+- `test "skips non-HTML content types"`
+- `test "normalizes extracted URLs"`
+
+### `crawler_supervisor_test.exs`
+- `test "starts crawler workers"`
+- `test "restarts crashed worker"`
+- `test "respects max_restarts configuration"`
+
+### `pagerank_computer_test.exs`
+- `test "computes pagerank for single node graph"`
+- `test "computes pagerank for simple two-node graph"`
+- `test "converges within iteration limit"`
+- `test "handles dangling nodes (no outlinks)"`
+- `test "pagerank scores sum to 1.0"`
+- `test "handles empty graph"`
+
+### `query_engine_test.exs`
+- `test "searches single shard"`
+- `test "merges results from multiple shards"`
+- `test "ranks results by combined score"`
+- `test "applies vector similarity scoring"`
+- `test "applies pagerank boost to results"`
+- `test "returns empty list for no matches"`
+- `test "respects limit parameter"`
+- `test "uses cache for repeated queries"`
+
+### `routing_maintenance_test.exs`
+- `test "routes query to correct shard"`
+- `test "discovers available shards"`
+- `test "removes unavailable shard from routing table"`
+- `test "rebalances after shard addition"`
+- `test "handles consistent hashing for shard selection"`
+
+### `storage_manager_test.exs`
+- `test "creates new shard file"`
+- `test "opens existing shard for reading"`
+- `test "inserts document into shard"`
+- `test "retrieves document by ID"`
+- `test "performs vector search on shard"`
+- `test "handles corrupted shard file"`
+- `test "respects shard immutability"`
+
+### `telemetry_test.exs`
+- `test "emits search latency metric"`
+- `test "emits shard query count metric"`
+- `test "emits cache hit/miss metrics"`
+- `test "attaches handlers on startup"`
+
+### `url_frontier_test.exs`
+- `test "enqueues URL"`
+- `test "dequeues URL in FIFO order"`
+- `test "deduplicates URLs"`
+- `test "respects politeness delay per domain"`
+- `test "prioritizes URLs by score"`
+- `test "returns nil when frontier is empty"`
+
+### `integration/search_flow_test.exs`
+- `test "end-to-end search returns ranked results"`
+- `test "cached query returns faster"`
+- `test "query with downed shard still returns partial results"`

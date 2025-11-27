@@ -1,0 +1,23 @@
+Considerations / Potential Challenges
+
+1. Shard consistency and updates:
+You mention immutable SQLite shards, which is great for simplicity and replication, but handling updates, deletions, or merges might get tricky. How do you envision keeping shards consistent over time?
+
+2. Query latency:
+Fan-out queries to multiple shards can add network and IO overhead. Even with BEAM concurrency, merging large result sets might become a bottleneck if shards or datasets scale dramatically. Some caching or approximate nearest neighbor strategies could help mitigate this.
+
+3. Vector storage in SQLite:
+sqlite-vss is efficient, but depending on vector dimensions and dataset size, SQLite might become less performant compared to specialized vector DBs for high-dimensional embeddings. That said, your design is tradeoff-friendly for moderate-scale workloads.
+
+4. Operational complexity:
+Elixir nodes auto-discovering each other is elegant, but in highly dynamic or multi-datacenter deployments, you may run into network partition scenarios. Supervising shards and coordinators in production will need careful observability.
+
+Suggestions / Enhancements
+
+Shard routing hints: Instead of querying all shards every time, maintain a lightweight index of shard “responsibility” for faster routing.
+
+Approximate search for large embeddings: For very large datasets, consider HNSW or similar methods integrated with SQLite.
+
+Shard versioning: Explicit versioning of shards could simplify updates without breaking immutability.
+
+More API endpoints: Filtering, faceted search, pagination, and batch queries could make MosaicDB more production-ready.

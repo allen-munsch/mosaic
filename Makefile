@@ -130,6 +130,32 @@ shell:
 iex:
 	@docker compose exec coordinator bin/semantic_fabric remote
 
+# Local Development Commands (using asdf)
+.PHONY: local-deps local-compile local-test local-run local-format local-iex
+local-deps:
+	@echo "Fetching local dependencies..."
+	@mix deps.get
+
+local-compile:
+	@echo "Compiling local project..."
+	@mix compile
+
+local-test:
+	@echo "Running local test suite..."
+	@mix test
+
+local-run:
+	@echo "Running local application..."
+	@mix run --no-halt
+
+local-format:
+	@echo "Formatting local code..."
+	@mix format
+
+local-iex:
+	@echo "Starting local IEx console..."
+	@iex -S mix
+
 # Utility commands
 .PHONY: update-deps
 update-deps:

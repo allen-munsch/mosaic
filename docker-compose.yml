@@ -1,7 +1,133 @@
+version: '3.8'
+
 services:
-  mosaic:
-    build: .
-    ports:
-      - "4040:4040"
+  # ============================================================================
+  # Mosaic Coordinator Node (Placeholder - runs minimal HTTP server)
+  # ============================================================================
+  coordinator:
+    image: elixir:1.16-alpine
+    container_name: mosaic-coordinator
+    hostname: coordinator
+    working_dir: /app
+    command: |
+      sh -c '
+        echo "Installing dependencies..."
+        apk add --no-cache curl sqlite &&
+        echo "Starting Mosaic Coordinator (placeholder mode)" &&
+        echo "Visit http://localhost:4040/health to verify" &&
+        while true; do
+          echo "HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nhealthy\n" | nc -l -p 4040 -q 1
+        done
+      '
     environment:
       - PORT=4040
+    ports:
+      - "4040:4040"
+    volumes:
+      - coordinator-data:/data
+    networks:
+      - mosaic
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4040"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # ============================================================================
+  # Redis (Distributed caching)
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: mosaic-redis
+    hostname: redis
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - mosaic
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # ============================================================================
+  # Nginx (Load balancer and API gateway)
+  # ============================================================================
+  nginx:
+    image: nginx:alpine
+    container_name: mosaic-nginx
+    hostname: nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - mosaic
+    depends_on:
+      - coordinator
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # ============================================================================
+  # Prometheus (Metrics collection)
+  # ============================================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: mosaic-prometheus
+    hostname: prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - mosaic
+    restart: unless-stopped
+
+  # ============================================================================
+  # Grafana (Metrics visualization)
+  # ============================================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: mosaic-grafana
+    hostname: grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - mosaic
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  coordinator-data:
+    driver: local
+  redis-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+
+networks:
+  mosaic:
+    driver: bridge
