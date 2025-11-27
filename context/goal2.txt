@@ -27,3 +27,23 @@ Update/deletion story is missing: With immutable shards, how do you handle docum
 Several components are stubs: PageRankComputer, CrawlerPipeline, CircuitBreaker, URLFrontier all just return empty state. The architecture is there, but key functionality isn't implemented.
 sqlite-vss at claimed scale: The docs claim 100M+ document capacity. sqlite-vss is excellent for moderate scale, but I'd want to see benchmarks validating this—especially around index build time and memory pressure.
 Shard rebalancing: What happens when you add workers? The docs mention "elastic sharding" but I don't see the implementation for redistributing existing shards.
+
+The update/delete problem - Even for internal use, you'll need this quickly. Simplest approach: soft deletes with a deleted_at column, periodic compaction that rebuilds shards excluding deleted docs.
+Better shard routing - The single-centroid approach will bite you fast with real data. Consider storing 3-5 cluster centroids per shard instead of one.
+
+Before investing in scale-out complexity:
+
+```bash
+# Create a realistic benchmark
+# - 100K documents of your actual data
+# - Real query patterns from your use case
+# - Measure: latency p50/p95/p99, recall accuracy
+```
+
+This will tell you whether sqlite-vss holds up for your workload and whether centroid routing actually finds the right shards. I'd guess you'll discover the routing needs tuning before raw throughput becomes the bottleneck.
+
+Only after Phase 2 proves the core works:
+
+- Shard rebalancing logic
+- Multi-node coordination
+- The crawler pipeline (if you needed)
