@@ -452,7 +452,7 @@ Time 4:   Shard marked healthy
 
 ---
 
-## Performance Benchmarks
+## Performance Benchmarks (Goals)
 
 ### Query Latency Distribution
 ```
@@ -478,4 +478,23 @@ Disk I/O: ████░░░░░░░░░░░░ 20%
 Network:  ██████░░░░░░░░░░ 30%
 ```
 
-This architecture provides a robust, scalable foundation for semantic search!
+
+## Vector Search Landscape Comparison
+
+| Aspect | **PostgreSQL + pgvector** | **FAISS** | **Qdrant** | **Pinecone** | **Weaviate** | **MosaicDB** |
+|--------|---------------------------|-----------|------------|--------------|--------------|----------------------|
+| **Type** | RDBMS + extension | Library | Vector DB | Managed service | Vector DB | Distributed search engine |
+| **Architecture** | Single node (+ replicas) | In-memory indexes | Rust-based, distributed | Fully managed cloud | Go-based, modular | SQLite shards + Elixir coordination |
+| **Primary Language** | C / SQL | C++ / Python | Rust | N/A (API only) | Go | Elixir |
+| **Vector Index Types** | IVFFlat, HNSW | IVF, HNSW, PQ, flat | HNSW | Proprietary | HNSW | sqlite-vss (Faiss-based) |
+| **Max Vectors (practical)** | ~10M | 1B+ (with sharding) | 100M+ | "Unlimited" (paid) | 100M+ | Goal Unlimited |
+| **Hybrid Search** | Full SQL + vectors | No (vectors only) | Filters + vectors | Metadata filters | BM25 + vectors | SQL + vectors + PageRank |
+| **ACID Transactions** | Full | None | Limited | None | None | Per-shard only |
+| **Hosting Model** | Self-host or managed | Library (embed in app) | Self-host or cloud | Cloud only | Self-host or cloud | Self-host |
+| **Operational Complexity** | Low (familiar) | Very low (it's a library) | Medium | None (managed) | Medium | Low |
+| **Cost at Scale** | $$ (compute) | $ (just RAM) | $$ | $$$$ | $$ | $ (SQLite is cheap) |
+| **Latency (p50)** | 5-50ms | <1-10ms | 5-30ms | 10-50ms | 10-50ms | 50-200ms (estimated) |
+| **Learning Curve** | Low | Medium | Medium | Very low | Medium | Low |
+| **Community/Ecosystem** | Massive | Large | Growing | Moderate | Growing | Tiny |
+
+---

@@ -1,0 +1,887 @@
+## Refactoring for Flexibility + Hybrid Ranking
+
+The core insight: you need **behaviour-based abstractions** so implementations can be swapped without touching business logic.
+
+### Current Problem
+
+```elixir
+# Redis is hardcoded everywhere
+def init(_opts) do
+  {:ok, redix_conn} = Redix.start_link(redis_url)  # Tight coupling
+  ...
+end
+
+# Ranking logic is scattered and implicit
+results
+|> Enum.sort_by(& &1.similarity, :desc)  # Just vector similarity
+```
+
+---
+
+## Phase 1: Cache Abstraction
+
+### Define the Behaviour
+
+```elixir
+# lib/mosaic/cache/cache.ex
+defmodule Mosaic.Cache do
+  @moduledoc """
+  Behaviour for cache implementations.
+  Allows swapping Redis for ETS, Cachex, or anything else.
+  """
+
+  @type key :: binary()
+  @type value :: term()
+  @type ttl :: pos_integer() | :infinity
+
+  @callback get(key()) :: {:ok, value()} | :miss | {:error, term()}
+  @callback put(key(), value(), ttl()) :: :ok | {:error, term()}
+  @callback delete(key()) :: :ok | {:error, term()}
+  @callback clear() :: :ok | {:error, term()}
+
+  # Optional batch operations
+  @callback get_many([key()]) :: %{key() => value()}
+  @callback put_many([{key(), value()}], ttl()) :: :ok | {:error, term()}
+
+  @optional_callbacks get_many: 1, put_many: 2
+end
+```
+
+### Redis Implementation (Keep What You Have)
+
+```elixir
+# lib/mosaic/cache/redis.ex
+defmodule Mosaic.Cache.Redis do
+  @behaviour Mosaic.Cache
+  use GenServer
+
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, opts, name: opts[:name] || __MODULE__)
+  end
+
+  def init(opts) do
+    url = Keyword.get(opts, :url, "redis://localhost:6379")
+    {:ok, conn} = Redix.start_link(url)
+    {:ok, %{conn: conn}}
+  end
+
+  @impl true
+  def get(key) do
+    GenServer.call(__MODULE__, {:get, key})
+  end
+
+  @impl true
+  def put(key, value, ttl) do
+    GenServer.call(__MODULE__, {:put, key, value, ttl})
+  end
+
+  @impl true
+  def delete(key) do
+    GenServer.call(__MODULE__, {:delete, key})
+  end
+
+  @impl true
+  def clear do
+    GenServer.call(__MODULE__, :clear)
+  end
+
+  def handle_call({:get, key}, _from, %{conn: conn} = state) do
+    result = case Redix.command(conn, ["GET", key]) do
+      {:ok, nil} -> :miss
+      {:ok, value} -> {:ok, Jason.decode!(value)}
+      {:error, _} = err -> err
+    end
+    {:reply, result, state}
+  end
+
+  def handle_call({:put, key, value, ttl}, _from, %{conn: conn} = state) do
+    encoded = Jason.encode!(value)
+    result = case ttl do
+      :infinity -> Redix.command(conn, ["SET", key, encoded])
+      seconds -> Redix.command(conn, ["SETEX", key, seconds, encoded])
+    end
+    {:reply, normalize_result(result), state}
+  end
+
+  def handle_call({:delete, key}, _from, %{conn: conn} = state) do
+    result = Redix.command(conn, ["DEL", key])
+    {:reply, normalize_result(result), state}
+  end
+
+  def handle_call(:clear, _from, %{conn: conn} = state) do
+    result = Redix.command(conn, ["FLUSHDB"])
+    {:reply, normalize_result(result), state}
+  end
+
+  defp normalize_result({:ok, _}), do: :ok
+  defp normalize_result({:error, _} = err), do: err
+end
+```
+
+### ETS Implementation (Zero External Dependencies)
+
+```elixir
+# lib/mosaic/cache/ets.ex
+defmodule Mosaic.Cache.ETS do
+  @behaviour Mosaic.Cache
+  use GenServer
+
+  @table :mosaic_cache
+  @cleanup_interval :timer.minutes(1)
+
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, opts, name: opts[:name] || __MODULE__)
+  end
+
+  def init(_opts) do
+    table = :ets.new(@table, [:set, :public, :named_table, read_concurrency: true])
+    schedule_cleanup()
+    {:ok, %{table: table}}
+  end
+
+  @impl true
+  def get(key) do
+    case :ets.lookup(@table, key) do
+      [{^key, value, expires_at}] ->
+        if expires_at == :infinity or expires_at > System.system_time(:second) do
+          {:ok, value}
+        else
+          delete(key)
+          :miss
+        end
+      [] ->
+        :miss
+    end
+  end
+
+  @impl true
+  def put(key, value, ttl) do
+    expires_at = case ttl do
+      :infinity -> :infinity
+      seconds -> System.system_time(:second) + seconds
+    end
+    :ets.insert(@table, {key, value, expires_at})
+    :ok
+  end
+
+  @impl true
+  def delete(key) do
+    :ets.delete(@table, key)
+    :ok
+  end
+
+  @impl true
+  def clear do
+    :ets.delete_all_objects(@table)
+    :ok
+  end
+
+  @impl true
+  def get_many(keys) do
+    keys
+    |> Enum.map(fn key -> {key, get(key)} end)
+    |> Enum.filter(fn {_, result} -> match?({:ok, _}, result) end)
+    |> Enum.map(fn {key, {:ok, value}} -> {key, value} end)
+    |> Map.new()
+  end
+
+  @impl true
+  def put_many(entries, ttl) do
+    Enum.each(entries, fn {key, value} -> put(key, value, ttl) end)
+    :ok
+  end
+
+  def handle_info(:cleanup, state) do
+    now = System.system_time(:second)
+    :ets.select_delete(@table, [{{:_, :_, :"$1"}, [{:"/=", :"$1", :infinity}, {:<, :"$1", now}], [true]}])
+    schedule_cleanup()
+    {:noreply, state}
+  end
+
+  defp schedule_cleanup do
+    Process.send_after(self(), :cleanup, @cleanup_interval)
+  end
+end
+```
+
+### Cachex Implementation (Best of Both Worlds)
+
+```elixir
+# lib/mosaic/cache/cachex_adapter.ex
+defmodule Mosaic.Cache.CachexAdapter do
+  @behaviour Mosaic.Cache
+
+  @cache_name :mosaic_cache
+
+  def child_spec(opts) do
+    %{
+      id: __MODULE__,
+      start: {Cachex, :start_link, [@cache_name, opts]}
+    }
+  end
+
+  @impl true
+  def get(key) do
+    case Cachex.get(@cache_name, key) do
+      {:ok, nil} -> :miss
+      {:ok, value} -> {:ok, value}
+      {:error, _} = err -> err
+    end
+  end
+
+  @impl true
+  def put(key, value, ttl) do
+    opts = case ttl do
+      :infinity -> []
+      seconds -> [ttl: :timer.seconds(seconds)]
+    end
+    case Cachex.put(@cache_name, key, value, opts) do
+      {:ok, true} -> :ok
+      {:error, _} = err -> err
+    end
+  end
+
+  @impl true
+  def delete(key) do
+    Cachex.del(@cache_name, key)
+    :ok
+  end
+
+  @impl true
+  def clear do
+    Cachex.clear(@cache_name)
+    :ok
+  end
+end
+```
+
+---
+
+## Phase 2: Hybrid Ranking as First-Class
+
+This is the big one. You need to separate **retrieval** from **ranking**.
+
+### The Ranking Abstraction
+
+```elixir
+# lib/mosaic/ranking/scorer.ex
+defmodule Mosaic.Ranking.Scorer do
+  @moduledoc """
+  Behaviour for individual scoring functions.
+  Each scorer produces a normalized score in [0, 1].
+  """
+
+  @type document :: map()
+  @type context :: map()  # Query context, user info, etc.
+  @type score :: float()
+
+  @callback name() :: atom()
+  @callback score(document(), context()) :: score()
+  @callback weight() :: float()  # Default weight for this scorer
+end
+```
+
+### Core Scorers
+
+```elixir
+# lib/mosaic/ranking/scorers/vector_similarity.ex
+defmodule Mosaic.Ranking.Scorers.VectorSimilarity do
+  @behaviour Mosaic.Ranking.Scorer
+
+  @impl true
+  def name, do: :vector_similarity
+
+  @impl true
+  def score(%{similarity: sim}, _context) when is_number(sim) do
+    # Already normalized to [0, 1] from cosine similarity
+    max(0.0, sim)
+  end
+  def score(_, _), do: 0.0
+
+  @impl true
+  def weight, do: 0.6
+end
+
+# lib/mosaic/ranking/scorers/pagerank.ex
+defmodule Mosaic.Ranking.Scorers.PageRank do
+  @behaviour Mosaic.Ranking.Scorer
+
+  @max_pagerank 100.0  # Normalize against expected max
+
+  @impl true
+  def name, do: :pagerank
+
+  @impl true
+  def score(%{pagerank: pr}, _context) when is_number(pr) do
+    # Normalize PageRank to [0, 1]
+    min(1.0, pr / @max_pagerank)
+  end
+  def score(_, _), do: 0.0
+
+  @impl true
+  def weight, do: 0.2
+end
+
+# lib/mosaic/ranking/scorers/freshness.ex
+defmodule Mosaic.Ranking.Scorers.Freshness do
+  @behaviour Mosaic.Ranking.Scorer
+
+  @half_life_days 30  # Score decays by half every 30 days
+
+  @impl true
+  def name, do: :freshness
+
+  @impl true
+  def score(%{created_at: created_at}, _context) when not is_nil(created_at) do
+    age_days = DateTime.diff(DateTime.utc_now(), created_at, :day)
+    # Exponential decay
+    :math.pow(0.5, age_days / @half_life_days)
+  end
+  def score(_, _), do: 0.5  # Neutral score if no date
+
+  @impl true
+  def weight, do: 0.1
+end
+
+# lib/mosaic/ranking/scorers/text_match.ex
+defmodule Mosaic.Ranking.Scorers.TextMatch do
+  @behaviour Mosaic.Ranking.Scorer
+
+  @impl true
+  def name, do: :text_match
+
+  @impl true
+  def score(%{text: text}, %{query_terms: terms}) when is_binary(text) and is_list(terms) do
+    text_lower = String.downcase(text)
+    matches = Enum.count(terms, &String.contains?(text_lower, String.downcase(&1)))
+    matches / max(length(terms), 1)
+  end
+  def score(_, _), do: 0.0
+
+  @impl true
+  def weight, do: 0.1
+end
+```
+
+### Score Fusion Strategies
+
+```elixir
+# lib/mosaic/ranking/fusion.ex
+defmodule Mosaic.Ranking.Fusion do
+  @moduledoc """
+  Strategies for combining multiple scores into a final ranking.
+  """
+
+  @type scored_doc :: %{scores: %{atom() => float()}, final_score: float()}
+  @type weights :: %{atom() => float()}
+
+  @doc "Weighted linear combination (default)"
+  @spec weighted_sum([map()], weights()) :: [scored_doc()]
+  def weighted_sum(documents, weights) do
+    documents
+    |> Enum.map(fn doc ->
+      final_score = weights
+      |> Enum.reduce(0.0, fn {scorer_name, weight}, acc ->
+        score = Map.get(doc.scores, scorer_name, 0.0)
+        acc + (score * weight)
+      end)
+
+      Map.put(doc, :final_score, final_score)
+    end)
+    |> Enum.sort_by(& &1.final_score, :desc)
+  end
+
+  @doc "Reciprocal Rank Fusion - good when score scales differ"
+  @spec rrf([map()], integer()) :: [scored_doc()]
+  def rrf(documents, k \\ 60) do
+    scorer_names = documents
+    |> Enum.flat_map(&Map.keys(&1.scores))
+    |> Enum.uniq()
+
+    # Get ranking for each scorer
+    rankings = scorer_names
+    |> Enum.map(fn scorer_name ->
+      ranked = documents
+      |> Enum.sort_by(fn doc -> Map.get(doc.scores, scorer_name, 0.0) end, :desc)
+      |> Enum.with_index(1)
+      |> Enum.map(fn {doc, rank} -> {doc.id, rank} end)
+      |> Map.new()
+
+      {scorer_name, ranked}
+    end)
+    |> Map.new()
+
+    # Compute RRF score
+    documents
+    |> Enum.map(fn doc ->
+      rrf_score = scorer_names
+      |> Enum.reduce(0.0, fn scorer_name, acc ->
+        rank = get_in(rankings, [scorer_name, doc.id]) || length(documents)
+        acc + (1.0 / (k + rank))
+      end)
+
+      Map.put(doc, :final_score, rrf_score)
+    end)
+    |> Enum.sort_by(& &1.final_score, :desc)
+  end
+
+  @doc "Maximum score across all scorers"
+  @spec max_score([map()]) :: [scored_doc()]
+  def max_score(documents) do
+    documents
+    |> Enum.map(fn doc ->
+      final = doc.scores |> Map.values() |> Enum.max(fn -> 0.0 end)
+      Map.put(doc, :final_score, final)
+    end)
+    |> Enum.sort_by(& &1.final_score, :desc)
+  end
+end
+```
+
+### The Ranker (Orchestrates Everything)
+
+```elixir
+# lib/mosaic/ranking/ranker.ex
+defmodule Mosaic.Ranking.Ranker do
+  @moduledoc """
+  Orchestrates the ranking pipeline.
+  Configurable scorers, weights, and fusion strategy.
+  """
+
+  alias Mosaic.Ranking.{Fusion, Scorers}
+
+  @default_scorers [
+    Scorers.VectorSimilarity,
+    Scorers.PageRank,
+    Scorers.Freshness,
+    Scorers.TextMatch
+  ]
+
+  @default_fusion :weighted_sum
+
+  defstruct [
+    scorers: @default_scorers,
+    weights: nil,  # nil = use scorer defaults
+    fusion: @default_fusion,
+    min_score: 0.0
+  ]
+
+  @type t :: %__MODULE__{}
+
+  def new(opts \\ []) do
+    %__MODULE__{
+      scorers: Keyword.get(opts, :scorers, @default_scorers),
+      weights: Keyword.get(opts, :weights),
+      fusion: Keyword.get(opts, :fusion, @default_fusion),
+      min_score: Keyword.get(opts, :min_score, 0.0)
+    }
+  end
+
+  @doc "Rank documents using configured scorers and fusion strategy"
+  def rank(documents, context, %__MODULE__{} = ranker) do
+    weights = resolve_weights(ranker)
+
+    documents
+    |> apply_scorers(context, ranker.scorers)
+    |> apply_fusion(ranker.fusion, weights)
+    |> filter_by_min_score(ranker.min_score)
+  end
+
+  defp apply_scorers(documents, context, scorers) do
+    Enum.map(documents, fn doc ->
+      scores = scorers
+      |> Enum.map(fn scorer ->
+        {scorer.name(), scorer.score(doc, context)}
+      end)
+      |> Map.new()
+
+      Map.put(doc, :scores, scores)
+    end)
+  end
+
+  defp apply_fusion(documents, :weighted_sum, weights) do
+    Fusion.weighted_sum(documents, weights)
+  end
+  defp apply_fusion(documents, :rrf, _weights) do
+    Fusion.rrf(documents)
+  end
+  defp apply_fusion(documents, :max, _weights) do
+    Fusion.max_score(documents)
+  end
+  defp apply_fusion(documents, fusion_fn, weights) when is_function(fusion_fn, 2) do
+    fusion_fn.(documents, weights)
+  end
+
+  defp resolve_weights(%{weights: nil, scorers: scorers}) do
+    scorers
+    |> Enum.map(fn scorer -> {scorer.name(), scorer.weight()} end)
+    |> Map.new()
+  end
+  defp resolve_weights(%{weights: weights}), do: weights
+
+  defp filter_by_min_score(documents, min_score) do
+    Enum.filter(documents, &(&1.final_score >= min_score))
+  end
+end
+```
+
+---
+
+## Phase 3: Refactored Query Engine
+
+Now tie it all together:
+
+```elixir
+# lib/mosaic/query_engine.ex
+defmodule Mosaic.QueryEngine do
+  use GenServer
+  require Logger
+
+  alias Mosaic.Ranking.Ranker
+
+  defstruct [
+    :cache,           # Cache implementation module
+    :ranker,          # Ranker configuration
+    :cache_ttl
+  ]
+
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  def init(opts) do
+    cache_impl = Keyword.get(opts, :cache, Mosaic.Cache.ETS)
+    cache_ttl = Keyword.get(opts, :cache_ttl, 300)
+
+    ranker = Keyword.get(opts, :ranker, Ranker.new())
+
+    state = %__MODULE__{
+      cache: cache_impl,
+      ranker: ranker,
+      cache_ttl: cache_ttl
+    }
+
+    {:ok, state}
+  end
+
+  def search(query_text, opts \\ []) do
+    GenServer.call(__MODULE__, {:search, query_text, opts}, 30_000)
+  end
+
+  @doc "Search with custom ranker configuration"
+  def search_with_ranker(query_text, ranker_opts, search_opts \\ []) do
+    GenServer.call(__MODULE__, {:search_with_ranker, query_text, ranker_opts, search_opts}, 30_000)
+  end
+
+  def handle_call({:search, query_text, opts}, _from, state) do
+    result = do_search(query_text, opts, state.ranker, state)
+    {:reply, result, state}
+  end
+
+  def handle_call({:search_with_ranker, query_text, ranker_opts, search_opts}, _from, state) do
+    custom_ranker = Ranker.new(ranker_opts)
+    result = do_search(query_text, search_opts, custom_ranker, state)
+    {:reply, result, state}
+  end
+
+  defp do_search(query_text, opts, ranker, state) do
+    limit = Keyword.get(opts, :limit, 20)
+    skip_cache = Keyword.get(opts, :skip_cache, false)
+    cache_key = build_cache_key(query_text, opts, ranker)
+
+    # Check cache
+    unless skip_cache do
+      case state.cache.get(cache_key) do
+        {:ok, cached} ->
+          Logger.debug("Cache hit for query: #{query_text}")
+          {:ok, cached}
+
+        :miss ->
+          execute_and_cache(query_text, opts, ranker, cache_key, limit, state)
+      end
+    else
+      execute_search(query_text, opts, ranker, limit)
+    end
+  end
+
+  defp execute_and_cache(query_text, opts, ranker, cache_key, limit, state) do
+    case execute_search(query_text, opts, ranker, limit) do
+      {:ok, results} = success ->
+        state.cache.put(cache_key, results, state.cache_ttl)
+        success
+
+      error ->
+        error
+    end
+  end
+
+  defp execute_search(query_text, opts, ranker, limit) do
+    # Generate embedding
+    query_embedding = Mosaic.EmbeddingService.encode(query_text)
+    query_terms = extract_terms(query_text)
+
+    # Build ranking context
+    context = %{
+      query_text: query_text,
+      query_terms: query_terms,
+      query_embedding: query_embedding
+    }
+
+    # Find candidate shards
+    shard_limit = Keyword.get(opts, :shard_limit, Mosaic.Config.get(:default_shard_limit))
+
+    case Mosaic.ShardRouter.find_similar_shards(query_embedding, shard_limit, opts) do
+      {:ok, shards} ->
+        # Retrieve candidates from shards
+        candidates = retrieve_from_shards(shards, query_embedding, limit * 3)
+
+        # Apply hybrid ranking
+        ranked = Ranker.rank(candidates, context, ranker)
+
+        {:ok, Enum.take(ranked, limit)}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp retrieve_from_shards(shards, query_embedding, limit) do
+    shards
+    |> Task.async_stream(fn shard ->
+      search_shard(shard, query_embedding, limit)
+    end, ordered: false, timeout: 10_000)
+    |> Enum.flat_map(fn
+      {:ok, {:ok, results}} -> results
+      {:ok, results} when is_list(results) -> results
+      _ -> []
+    end)
+  end
+
+  defp search_shard(shard, query_embedding, limit) do
+    case Mosaic.ConnectionPool.checkout(shard.path) do
+      {:ok, conn} ->
+        results = do_vector_search(conn, query_embedding, limit)
+        Mosaic.ConnectionPool.checkin(shard.path, conn)
+        {:ok, Enum.map(results, &Map.put(&1, :shard_id, shard.id))}
+
+      error ->
+        Logger.warning("Failed to search shard #{shard.id}: #{inspect(error)}")
+        {:error, []}
+    end
+  end
+
+  defp do_vector_search(conn, query_embedding, limit) do
+    vector_json = Jason.encode!(query_embedding)
+    sql = """
+    SELECT d.id, d.text, d.metadata, d.created_at, d.pagerank, v.distance
+    FROM vss_vectors v
+    JOIN documents d ON d.rowid = v.rowid
+    WHERE vss_search(v.vec, ?)
+    LIMIT ?
+    """
+
+    {:ok, stmt} = Exqlite.Sqlite3.prepare(conn, sql)
+    :ok = Exqlite.Sqlite3.bind(stmt, [vector_json, limit])
+    rows = fetch_all_rows(conn, stmt)
+    Exqlite.Sqlite3.release(conn, stmt)
+
+    Enum.map(rows, fn [id, text, metadata, created_at, pagerank, distance] ->
+      %{
+        id: id,
+        text: text,
+        metadata: safe_decode(metadata),
+        created_at: parse_datetime(created_at),
+        pagerank: pagerank || 0.0,
+        similarity: distance_to_similarity(distance)
+      }
+    end)
+  end
+
+  defp fetch_all_rows(conn, stmt, acc \\ []) do
+    case Exqlite.Sqlite3.step(conn, stmt) do
+      {:row, row} -> fetch_all_rows(conn, stmt, [row | acc])
+      :done -> Enum.reverse(acc)
+    end
+  end
+
+  defp build_cache_key(query_text, opts, ranker) do
+    components = [
+      query_text,
+      Keyword.get(opts, :limit, 20),
+      ranker.fusion,
+      :erlang.phash2(ranker.weights)
+    ]
+    "query:#{:erlang.phash2(components)}"
+  end
+
+  defp extract_terms(text) do
+    text
+    |> String.downcase()
+    |> String.split(~r/\W+/)
+    |> Enum.filter(&(String.length(&1) > 2))
+  end
+
+  defp distance_to_similarity(nil), do: 0.0
+  defp distance_to_similarity(d) when is_number(d), do: 1.0 / (1.0 + d)
+
+  defp safe_decode(nil), do: %{}
+  defp safe_decode(json) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, decoded} -> decoded
+      _ -> %{}
+    end
+  end
+
+  defp parse_datetime(nil), do: nil
+  defp parse_datetime(str) when is_binary(str) do
+    case DateTime.from_iso8601(str) do
+      {:ok, dt, _} -> dt
+      _ -> nil
+    end
+  end
+end
+```
+
+---
+
+## Phase 4: Configuration-Driven Setup
+
+```elixir
+# lib/mosaic/application.ex (updated children list)
+defp children do
+  cache_impl = cache_module()
+  ranker_config = ranker_config()
+
+  [
+    # Cache - configurable implementation
+    cache_child_spec(cache_impl),
+
+    # ... other children ...
+
+    # Query engine with injected dependencies
+    {Mosaic.QueryEngine, [
+      cache: cache_impl,
+      ranker: Mosaic.Ranking.Ranker.new(ranker_config),
+      cache_ttl: Mosaic.Config.get(:query_cache_ttl_seconds)
+    ]}
+  ]
+end
+
+defp cache_module do
+  case Mosaic.Config.get(:cache_backend) do
+    "redis" -> Mosaic.Cache.Redis
+    "cachex" -> Mosaic.Cache.CachexAdapter
+    "ets" -> Mosaic.Cache.ETS
+    _ -> Mosaic.Cache.ETS  # Default
+  end
+end
+
+defp cache_child_spec(Mosaic.Cache.Redis) do
+  {Mosaic.Cache.Redis, [url: Mosaic.Config.get(:redis_url)]}
+end
+defp cache_child_spec(Mosaic.Cache.CachexAdapter) do
+  Mosaic.Cache.CachexAdapter.child_spec([])
+end
+defp cache_child_spec(Mosaic.Cache.ETS) do
+  {Mosaic.Cache.ETS, []}
+end
+
+defp ranker_config do
+  [
+    weights: %{
+      vector_similarity: Mosaic.Config.get(:weight_vector, 0.6),
+      pagerank: Mosaic.Config.get(:weight_pagerank, 0.2),
+      freshness: Mosaic.Config.get(:weight_freshness, 0.1),
+      text_match: Mosaic.Config.get(:weight_text_match, 0.1)
+    },
+    fusion: Mosaic.Config.get(:fusion_strategy, :weighted_sum) |> String.to_atom(),
+    min_score: Mosaic.Config.get(:min_score, 0.0)
+  ]
+end
+```
+
+---
+
+## New Config Options
+
+```elixir
+# Add to Mosaic.Config init
+%{
+  # ... existing config ...
+
+  # Cache backend: "ets" | "redis" | "cachex"
+  cache_backend: System.get_env("CACHE_BACKEND", "ets"),
+
+  # Ranking weights (must sum to ~1.0)
+  weight_vector: parse_float(System.get_env("WEIGHT_VECTOR"), 0.6),
+  weight_pagerank: parse_float(System.get_env("WEIGHT_PAGERANK"), 0.2),
+  weight_freshness: parse_float(System.get_env("WEIGHT_FRESHNESS"), 0.1),
+  weight_text_match: parse_float(System.get_env("WEIGHT_TEXT_MATCH"), 0.1),
+
+  # Fusion strategy: "weighted_sum" | "rrf" | "max"
+  fusion_strategy: System.get_env("FUSION_STRATEGY", "weighted_sum"),
+
+  # Minimum final score to return
+  min_score: parse_float(System.get_env("MIN_SCORE"), 0.0)
+}
+```
+
+---
+
+## Usage Examples
+
+```elixir
+# Default search (uses configured ranker)
+Mosaic.QueryEngine.search("machine learning papers")
+
+# Override weights for this query
+Mosaic.QueryEngine.search_with_ranker(
+  "breaking news AI",
+  [
+    weights: %{
+      vector_similarity: 0.3,
+      freshness: 0.5,        # Boost freshness for news
+      pagerank: 0.1,
+      text_match: 0.1
+    }
+  ]
+)
+
+# Use RRF fusion (good when you don't know optimal weights)
+Mosaic.QueryEngine.search_with_ranker(
+  "complex multi-topic query",
+  [fusion: :rrf]
+)
+
+# Add custom scorer at runtime
+defmodule MyApp.Scorers.UserPreference do
+  @behaviour Mosaic.Ranking.Scorer
+
+  def name, do: :user_preference
+  def weight, do: 0.2
+
+  def score(doc, %{user_preferences: prefs}) do
+    # Custom logic based on user history
+    calculate_preference_score(doc, prefs)
+  end
+  def score(_, _), do: 0.5
+end
+```
+
+---
+
+## Migration Path
+
+| Step | Effort | Risk | Value |
+|------|--------|------|-------|
+| 1. Add `Mosaic.Cache` behaviour | Low | Low | Unlocks backend swapping |
+| 2. Implement `Mosaic.Cache.ETS` | Low | Low | Remove Redis dependency |
+| 3. Add `Mosaic.Ranking.Scorer` behaviour | Medium | Low | Foundation for hybrid |
+| 4. Implement core scorers | Medium | Low | Immediate ranking improvement |
+| 5. Add `Mosaic.Ranking.Fusion` | Medium | Low | Flexible score combination |
+| 6. Refactor `QueryEngine` | Medium | Medium | Ties everything together |
+| 7. Add config-driven setup | Low | Low | Runtime flexibility |
+
+Start with steps 1-2 (cache abstraction). You'll immediately be able to run without Redis, which simplifies local development. Then tackle 3-6 for hybrid ranking.
+
+Want me to detail any of these components further, or sketch out tests for the ranking system?
