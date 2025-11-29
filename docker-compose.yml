@@ -1,38 +1,30 @@
-version: '3.8'
-
 services:
   # ============================================================================
   # Mosaic Coordinator Node (Placeholder - runs minimal HTTP server)
   # ============================================================================
-  coordinator:
-    image: elixir:1.16-alpine
-    container_name: mosaic-coordinator
-    hostname: coordinator
+  mosaic:
+    build: .
+    container_name: mosaic
+    hostname: mosaic
     working_dir: /app
-    command: |
-      sh -c '
-        echo "Installing dependencies..."
-        apk add --no-cache curl sqlite &&
-        echo "Starting Mosaic Coordinator (placeholder mode)" &&
-        echo "Visit http://localhost:4040/health to verify" &&
-        while true; do
-          echo "HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nhealthy\n" | nc -l -p 4040 -q 1
-        done
-      '
     environment:
       - PORT=4040
+      - SQLITE_VEC_PATH=/app/deps/sqlite_vec/priv/0.1.5/vec0.so # Adjust path as necessary
+      - CLUSTER_SECRET=mosaic-secret # Use environment variable for consistency
     ports:
       - "4040:4040"
     volumes:
-      - coordinator-data:/data
+      - .:/app
+      - mosaic-data:/data # Data volume for SQLite shards
     networks:
       - mosaic
+      - redis-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4040"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+      test: ["CMD", "curl", "-f", "http://mosaic:4040/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
   # ============================================================================
@@ -47,8 +39,7 @@ services:
       - "6379:6379"
     volumes:
       - redis-data:/data
-    networks:
-      - mosaic
+
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -70,9 +61,9 @@ services:
     networks:
       - mosaic
     depends_on:
-      - coordinator
+      - mosaic
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://mosaic:4040/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -118,8 +109,22 @@ services:
       - prometheus
     restart: unless-stopped
 
+  k6:
+    image: grafana/k6:latest
+    profiles: ["load-test"] # Only start k6 when load-test profile is active
+    working_dir: /app
+    volumes:
+      - .:/app
+    networks:
+      - mosaic
+    depends_on:
+      mosaic:
+        condition: service_healthy # Ensure mosaic is healthy before k6 runs
+
+
+
 volumes:
-  coordinator-data:
+  mosaic-data:
     driver: local
   redis-data:
     driver: local
@@ -130,4 +135,4 @@ volumes:
 
 networks:
   mosaic:
-    driver: bridge
+  redis-net:

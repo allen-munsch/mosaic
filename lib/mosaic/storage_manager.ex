@@ -15,20 +15,27 @@ defmodule Mosaic.StorageManager do
       File.mkdir_p!(Path.dirname(path))
       {:ok, conn} = Exqlite.Sqlite3.open(path)
 
-      :ok = Exqlite.Sqlite3.enable_load_extension(conn, true)
-      load_ext(conn, sqlite_vec_path()) # Use sqlite-vec extension
-
-      Exqlite.Sqlite3.execute(conn, "PRAGMA journal_mode=WAL;")
-      Exqlite.Sqlite3.execute(conn, "PRAGMA synchronous=NORMAL;")
-      Exqlite.Sqlite3.execute(conn, "PRAGMA cache_size=-128000;")
-      Exqlite.Sqlite3.execute(conn, "PRAGMA temp_store=MEMORY;")
-      Exqlite.Sqlite3.execute(conn, "PRAGMA mmap_size=268435456;")
-
-      create_schema(conn)
-      :ok = Exqlite.Sqlite3.close(conn)
-
-      Logger.info("Successfully created shard at #{path}")
-      {:reply, {:ok, path}, state}
+      with :ok <- Exqlite.Sqlite3.enable_load_extension(conn, true),
+           {:ok, ^conn} <- load_ext(conn, sqlite_vec_path()),
+           :ok <- Exqlite.Sqlite3.execute(conn, "PRAGMA journal_mode=WAL;"),
+           :ok <- Exqlite.Sqlite3.execute(conn, "PRAGMA synchronous=NORMAL;"),
+           :ok <- Exqlite.Sqlite3.execute(conn, "PRAGMA cache_size=-128000;"),
+           :ok <- Exqlite.Sqlite3.execute(conn, "PRAGMA temp_store=MEMORY;"),
+           :ok <- Exqlite.Sqlite3.execute(conn, "PRAGMA mmap_size=268435456;"),
+           :ok <- create_schema(conn) do
+        :ok = Exqlite.Sqlite3.close(conn)
+        Logger.info("Successfully created shard at #{path}")
+        {:reply, {:ok, path}, state}
+      else
+        {:error, reason} ->
+          Logger.error("Failed to create shard at #{path} due to extension load or schema error: #{inspect(reason)}")
+          Exqlite.Sqlite3.close(conn) # Ensure connection is closed on error
+          {:reply, {:error, reason}, state}
+        _ -> # Catch any other errors from execute/2
+          Logger.error("Failed to create shard at #{path} due to unexpected error.")
+          Exqlite.Sqlite3.close(conn)
+          {:reply, {:error, :unexpected_error}, state}
+      end
     rescue
       e ->
         Logger.error("Failed to create shard at #{path}: #{inspect(e)}")
@@ -60,10 +67,22 @@ defmodule Mosaic.StorageManager do
   end
 
   defp load_ext(conn, ext_path) do
-    {:ok, stmt} = Exqlite.Sqlite3.prepare(conn, "SELECT load_extension(?)")
-    :ok = Exqlite.Sqlite3.bind(stmt, [ext_path])
-    Exqlite.Sqlite3.step(conn, stmt)
-    Exqlite.Sqlite3.release(conn, stmt)
+    with {:ok, stmt} <- Exqlite.Sqlite3.prepare(conn, "SELECT load_extension(?)"),
+        :ok      <- Exqlite.Sqlite3.bind(stmt, [ext_path]),
+        result   <- Exqlite.Sqlite3.step(conn, stmt) do
+      Exqlite.Sqlite3.release(conn, stmt)
+      case result do
+        {:row, _} -> {:ok, conn}
+        :done -> {:ok, conn}
+        _ ->
+          Logger.error("Failed to load SQLite extension '#{ext_path}': #{inspect(result)}")
+          {:error, :extension_load_failed}
+      end
+    else
+      {:error, err} ->
+        Logger.error("Error preparing or binding SQLite extension load statement: #{inspect(err)}")
+        {:error, :extension_load_failed}
+    end
   end
 
   defp query_scalar(conn, sql) do
