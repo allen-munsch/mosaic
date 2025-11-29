@@ -16,8 +16,7 @@ defmodule Mosaic.StorageManager do
       {:ok, conn} = Exqlite.Sqlite3.open(path)
 
       :ok = Exqlite.Sqlite3.enable_load_extension(conn, true)
-      load_ext(conn, SqliteVss.loadable_path_vector0())
-      load_ext(conn, SqliteVss.loadable_path_vss0())
+      load_ext(conn, sqlite_vec_path()) # Use sqlite-vec extension
 
       Exqlite.Sqlite3.execute(conn, "PRAGMA journal_mode=WAL;")
       Exqlite.Sqlite3.execute(conn, "PRAGMA synchronous=NORMAL;")
@@ -38,17 +37,17 @@ defmodule Mosaic.StorageManager do
   end
 
   def handle_call({:open_shard, path}, _from, state) do
-    case Mosaic.Resilience.checkout(path) do
+    case Mosaic.ConnectionPool.checkout(path) do
       {:ok, conn} -> {:reply, {:ok, conn}, state}
       error -> {:reply, error, state}
     end
   end
 
   def handle_call({:get_shard_doc_count, path}, _from, state) do
-    case Mosaic.Resilience.checkout(path) do
+    case Mosaic.ConnectionPool.checkout(path) do
       {:ok, conn} ->
         count = query_scalar(conn, "SELECT COUNT(*) FROM documents;")
-        Mosaic.Resilience.checkin(path, conn)
+        Mosaic.ConnectionPool.checkin(path, conn)
         {:reply, {:ok, count}, state}
       error ->
         {:reply, error, state}
@@ -74,10 +73,29 @@ defmodule Mosaic.StorageManager do
     if is_binary(val), do: String.to_integer(val), else: val
   end
 
+  defp sqlite_vec_path do
+    System.get_env("SQLITE_VEC_PATH") || "deps/sqlite_vec/priv/vec0"
+  end
+
   defp create_schema(conn) do
-    Exqlite.Sqlite3.execute(conn, "CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, text TEXT NOT NULL, metadata TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);")
-    Exqlite.Sqlite3.execute(conn, "CREATE TABLE IF NOT EXISTS vectors (id TEXT PRIMARY KEY, vec BLOB NOT NULL, FOREIGN KEY (id) REFERENCES documents(id) ON DELETE CASCADE);")
+    # Documents table with embedding stored inline
+    Exqlite.Sqlite3.execute(conn, """
+      CREATE TABLE IF NOT EXISTS documents (
+        id TEXT PRIMARY KEY,
+        text TEXT NOT NULL,
+        metadata JSON,
+        embedding BLOB,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        pagerank REAL DEFAULT 0.0
+      );
+    """)
+
+    Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_docs_created ON documents(created_at);")
+    Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_docs_pagerank ON documents(pagerank DESC);")
+
+    # Vector index using sqlite-vec
     embedding_dim = Mosaic.Config.get(:embedding_dim)
-    Exqlite.Sqlite3.execute(conn, "CREATE VIRTUAL TABLE IF NOT EXISTS vss_vectors using vss0(vec(#{embedding_dim}));")
+    Exqlite.Sqlite3.execute(conn, "CREATE VIRTUAL TABLE IF NOT EXISTS vec_documents USING vec0(id TEXT PRIMARY KEY, embedding float[#{embedding_dim}]);")
   end
 end

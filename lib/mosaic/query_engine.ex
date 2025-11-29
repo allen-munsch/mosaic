@@ -135,10 +135,10 @@ defmodule Mosaic.QueryEngine do
   end
 
   defp search_shard(shard, query_embedding, limit) do
-    case Mosaic.Resilience.checkout(shard.path) do
+    case Mosaic.ConnectionPool.checkout(shard.path) do
       {:ok, conn} ->
         results = do_vector_search(conn, query_embedding, limit)
-        Mosaic.Resilience.checkin(shard.path, conn)
+        Mosaic.ConnectionPool.checkin(shard.path, conn)
         {:ok, Enum.map(results, &Map.put(&1, :shard_id, shard.id))}
 
       error ->
@@ -149,11 +149,13 @@ defmodule Mosaic.QueryEngine do
 
   defp do_vector_search(conn, query_embedding, limit) do
     vector_json = Jason.encode!(query_embedding)
+
     sql = """
-    SELECT d.id, d.text, d.metadata, d.created_at, d.pagerank, v.distance
-    FROM vss_vectors v
-    JOIN documents d ON d.rowid = v.rowid
-    WHERE vss_search(v.vec, ?)
+    SELECT d.id, d.text, d.metadata, d.created_at, d.pagerank,
+           vec_distance_cosine(d.embedding, ?) as distance
+    FROM documents d
+    WHERE d.embedding IS NOT NULL
+    ORDER BY distance ASC
     LIMIT ?
     """
 

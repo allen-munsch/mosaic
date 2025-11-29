@@ -41,10 +41,10 @@ defmodule Mosaic.FederatedQuery do
   end
 
   defp execute_on_shard(shard, sql, params) do
-    case Mosaic.Resilience.checkout(shard.path) do
+    case Mosaic.ConnectionPool.checkout(shard.path) do
       {:ok, conn} ->
         result = run_query(conn, sql, params)
-        Mosaic.Resilience.checkin(shard.path, conn)
+        Mosaic.ConnectionPool.checkin(shard.path, conn)
         result
       {:error, _} = err -> err
     end

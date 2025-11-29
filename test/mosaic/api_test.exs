@@ -26,7 +26,7 @@ defmodule Mosaic.APITest do
              |> put_req_header("content-type", "application/json")
              |> Mosaic.API.call(@opts)
       assert conn.status == 400
-      assert conn.resp_body =~ "Query cannot be empty"
+      assert conn.resp_body =~ "query cannot be empty"
     end
 
     test "with invalid JSON returns 400" do

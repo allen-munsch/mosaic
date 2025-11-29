@@ -59,6 +59,10 @@ defmodule Mosaic.ShardRouter do
   def update_centroid(shard_id, centroid), do: GenServer.cast(__MODULE__, {:update_centroid, shard_id, centroid})
   def register_shard(shard_info), do: GenServer.cast(__MODULE__, {:register_shard, shard_info})
 
+  def list_all_shards do
+    GenServer.call(__MODULE__, :list_all_shards)
+  end
+
   def handle_call({:find_similar, query_vector, limit, opts}, _from, state) do
     {shards, cache_hit} = Mosaic.WorkerPool.transaction(:router_pool, fn worker ->
       GenServer.call(worker, {:find_similar, query_vector, limit, opts, state})

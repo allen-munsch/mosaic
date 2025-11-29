@@ -35,12 +35,12 @@ defmodule Mosaic.RoutingMaintenance do
   end
 
   defp sample_embeddings(path, limit) do
-    case Mosaic.Resilience.checkout(path) do # Changed from Mosaic.ConnectionPool.checkout
+    case Mosaic.ConnectionPool.checkout(path) do # Changed from Mosaic.ConnectionPool.checkout
       {:ok, conn} ->
         {:ok, stmt} = Exqlite.Sqlite3.prepare(conn, "SELECT vec FROM vss_vectors ORDER BY RANDOM() LIMIT ?")
         Exqlite.Sqlite3.bind(stmt, [limit])
         result = fetch_vectors(conn, stmt)
-        Mosaic.Resilience.checkin(path, conn) # Changed from Mosaic.ConnectionPool.checkin
+        Mosaic.ConnectionPool.checkin(path, conn) # Changed from Mosaic.ConnectionPool.checkin
         result
       _ -> []
     end

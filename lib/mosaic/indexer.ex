@@ -11,10 +11,10 @@ defmodule Mosaic.Indexer do
     shard_path = Keyword.get(opts, :shard_path, shard_path_for(shard_id))
 
     with {:ok, ^shard_path} <- Mosaic.StorageManager.create_shard(shard_path),
-         {:ok, conn} <- Mosaic.Resilience.checkout(shard_path),
+         {:ok, conn} <- Mosaic.ConnectionPool.checkout(shard_path),
          :ok <- insert_documents(conn, documents),
          :ok <- register_shard(shard_id, shard_path, documents) do
-      Mosaic.Resilience.checkin(shard_path, conn)
+      Mosaic.ConnectionPool.checkin(shard_path, conn)
       Logger.info("Indexed #{length(documents)} documents in shard #{shard_id}")
       {:ok, %{shard_id: shard_id, shard_path: shard_path, doc_count: length(documents)}}
     end
@@ -25,23 +25,14 @@ defmodule Mosaic.Indexer do
     {shard_id, shard_path, conn} = get_or_create_active_shard()
 
     embedding = Mosaic.EmbeddingService.encode(text)
-    embedding_json = Jason.encode!(embedding)
 
-    :ok = Mosaic.DB.execute(conn, "INSERT INTO documents (id, text, metadata) VALUES (?, ?, ?)", [id, text, Jason.encode!(metadata)])
+    # Insert into documents table with embedding
+    :ok = Mosaic.DB.execute(conn, "INSERT INTO documents (id, text, metadata, embedding) VALUES (?, ?, ?, ?)", [id, text, Jason.encode!(metadata), Jason.encode!(embedding)])
 
-    # Get rowid of inserted doc
-    {:ok, stmt} = Exqlite.Sqlite3.prepare(conn, "SELECT rowid FROM documents WHERE id = ?")
-    :ok = Exqlite.Sqlite3.bind(stmt, [id])
-    {:row, [rowid]} = Exqlite.Sqlite3.step(conn, stmt)
-    Exqlite.Sqlite3.release(conn, stmt)
+    # Insert into vec_documents virtual table
+    :ok = Mosaic.DB.execute(conn, "INSERT INTO vec_documents (id, embedding) VALUES (?, ?)", [id, Jason.encode!(embedding)])
 
-    # Insert into vss_vectors with JSON format
-    {:ok, vss_stmt} = Exqlite.Sqlite3.prepare(conn, "INSERT INTO vss_vectors(rowid, vec) VALUES (?, ?)")
-    :ok = Exqlite.Sqlite3.bind(vss_stmt, [rowid, embedding_json])
-    :done = Exqlite.Sqlite3.step(conn, vss_stmt)
-    Exqlite.Sqlite3.release(conn, vss_stmt)
-
-    Mosaic.Resilience.checkin(shard_path, conn)
+    Mosaic.ConnectionPool.checkin(shard_path, conn)
     {:ok, %{id: id, shard_id: shard_id}}
   end
 
@@ -51,19 +42,11 @@ defmodule Mosaic.Indexer do
 
     Enum.zip(documents, embeddings)
     |> Enum.each(fn {{id, text, meta}, embedding} ->
-      :ok = Mosaic.DB.execute(conn, "INSERT INTO documents (id, text, metadata) VALUES (?, ?, ?)", [id, text, Jason.encode!(meta)])
+      # Insert into documents table with embedding
+      :ok = Mosaic.DB.execute(conn, "INSERT INTO documents (id, text, metadata, embedding) VALUES (?, ?, ?, ?)", [id, text, Jason.encode!(meta), Jason.encode!(embedding)])
 
-      {:ok, stmt} = Exqlite.Sqlite3.prepare(conn, "SELECT rowid FROM documents WHERE id = ?")
-      :ok = Exqlite.Sqlite3.bind(stmt, [id])
-      {:row, [rowid]} = Exqlite.Sqlite3.step(conn, stmt)
-      Exqlite.Sqlite3.release(conn, stmt)
-
-      # VSS requires JSON array format
-      embedding_json = Jason.encode!(embedding)
-      {:ok, vss_stmt} = Exqlite.Sqlite3.prepare(conn, "INSERT INTO vss_vectors(rowid, vec) VALUES (?, ?)")
-      :ok = Exqlite.Sqlite3.bind(vss_stmt, [rowid, embedding_json])
-      :done = Exqlite.Sqlite3.step(conn, vss_stmt)
-      Exqlite.Sqlite3.release(conn, vss_stmt)
+      # Insert into vec_documents virtual table
+      :ok = Mosaic.DB.execute(conn, "INSERT INTO vec_documents (id, embedding) VALUES (?, ?)", [id, Jason.encode!(embedding)])
     end)
     :ok
   end
@@ -104,7 +87,7 @@ defmodule Mosaic.Indexer do
     shard_id = generate_shard_id()
     shard_path = shard_path_for(shard_id)
     {:ok, ^shard_path} = Mosaic.StorageManager.create_shard(shard_path)
-    {:ok, conn} = Mosaic.Resilience.checkout(shard_path)
+    {:ok, conn} = Mosaic.ConnectionPool.checkout(shard_path)
     {shard_id, shard_path, conn}
   end
 

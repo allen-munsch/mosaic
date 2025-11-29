@@ -33,12 +33,13 @@ defmodule Mosaic.MixProject do
       {:plug, "~> 1.15"},
       {:jason, "~> 1.4"},
       {:libcluster, "~> 3.0"},
-      {:sqlite_vss, "~> 0.1.2"},
+      {:sqlite_vec, "~> 0.1.0"},
       {:bumblebee, "~> 0.1"},
       {:exla, "~> 0.10.0"},
       {:mox, "~> 1.0", only: :test},
       {:redix, "~> 1.0"},
-      {:poolboy, "~> 1.5"}
+      {:poolboy, "~> 1.5"},
+      {:duckdbex, "~> 0.3.18"}
     ]
   end
 

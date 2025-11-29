@@ -25,11 +25,11 @@ defmodule Mosaic.PageRankComputer do
   end
 
   defp compute_shard_pagerank(shard) do
-    case Mosaic.Resilience.checkout(shard.path) do
+    case Mosaic.ConnectionPool.checkout(shard.path) do
       {:ok, conn} ->
         Exqlite.Sqlite3.execute(conn, "ALTER TABLE documents ADD COLUMN pagerank REAL DEFAULT 0.0")
         Exqlite.Sqlite3.execute(conn, "UPDATE documents SET pagerank = 1.0")
-        Mosaic.Resilience.checkin(shard.path, conn)
+        Mosaic.ConnectionPool.checkin(shard.path, conn)
       _ -> :ok
     end
   rescue
