@@ -45,3 +45,4 @@ config/prod.secret.exs
 /node_modules
 /assets/node_modules
 /assets/_build
+context/
