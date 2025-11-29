@@ -81,6 +81,88 @@ defmodule Mosaic.ShardRouterTest do
              )
   end
 
+  test "cache hit path returns cached shards", %{routing_db_path: routing_db_path} do
+    {:ok, conn} = Exqlite.Sqlite3.open(routing_db_path)
+    insert_shard_metadata(conn, "cached1", "/path1.db", 100)
+    insert_shard_centroid(conn, "cached1", List.duplicate(1.0, 1536), 1.0)
+    Mosaic.ShardRouter.reset_state()
+
+    query_vector = List.duplicate(1.0, 1536)
+    {:ok, result1} = Mosaic.ShardRouter.find_similar_shards(query_vector, 1, vector_math_impl: TestVectorMath)
+    {:ok, result2} = Mosaic.ShardRouter.find_similar_shards(query_vector, 1, vector_math_impl: TestVectorMath)
+
+    assert result1 == result2
+    # Verify cache was actually used (check internal metrics)
+  end
+
+  test "LRU eviction when cache exceeds max_size", %{routing_db_path: routing_db_path} do
+    # Insert exactly 3 shards with VERY different vectors so we can control which ones match
+    {:ok, conn} = Exqlite.Sqlite3.open(routing_db_path)
+
+    insert_shard_metadata(conn, "shard1", "/path1.db", 100)
+    insert_shard_centroid(conn, "shard1", List.duplicate(1.0, 1536), :math.sqrt(1536))
+
+    insert_shard_metadata(conn, "shard2", "/path2.db", 200)
+    insert_shard_centroid(conn, "shard2", List.duplicate(-1.0, 1536), :math.sqrt(1536))
+
+    insert_shard_metadata(conn, "shard3", "/path3.db", 300)
+    insert_shard_centroid(conn, "shard3", List.duplicate(0.0, 1536) |> List.replace_at(0, 1.0), 1.0)
+
+    Mosaic.ShardRouter.reset_state()
+    Exqlite.Sqlite3.close(conn)
+
+    # Query 1: Load shard1 only (highest similarity to [1,1,1,...])
+    {:ok, [r1]} = Mosaic.ShardRouter.find_similar_shards(List.duplicate(1.0, 1536), 1, vector_math_impl: TestVectorMath, min_similarity: 0.9)
+    assert r1.id == "shard1"
+
+    # Query 2: Load shard2 only (highest similarity to [-1,-1,-1,...])
+    {:ok, [r2]} = Mosaic.ShardRouter.find_similar_shards(List.duplicate(-1.0, 1536), 1, vector_math_impl: TestVectorMath, min_similarity: 0.9)
+    assert r2.id == "shard2"
+
+    # Cache now has shard1, shard2 (full)
+
+    # Query 3: Load shard3 - should evict shard1 (oldest)
+    {:ok, [r3]} = Mosaic.ShardRouter.find_similar_shards([1.0] ++ List.duplicate(0.0, 1535), 1, vector_math_impl: TestVectorMath, min_similarity: 0.5)
+    assert r3.id == "shard3"
+
+    %{cache_keys: cache_keys} = Mosaic.ShardRouter.get_cache_state()
+    assert Enum.sort(cache_keys) == ["shard2", "shard3"]
+  end
+
+  test "access updates move shard to end of LRU", %{routing_db_path: routing_db_path} do
+    {:ok, conn} = Exqlite.Sqlite3.open(routing_db_path)
+    on_exit(fn -> Exqlite.Sqlite3.close(conn) end)
+
+    # Orthogonal vectors - each shard only matches its own direction
+    v1 = [1.0] ++ List.duplicate(0.0, 1535)
+    v2 = [0.0, 1.0] ++ List.duplicate(0.0, 1534)
+    v3 = [0.0, 0.0, 1.0] ++ List.duplicate(0.0, 1533)
+
+    insert_shard_metadata(conn, "shard1", "/path1.db", 100)
+    insert_shard_centroid(conn, "shard1", v1, 1.0)
+
+    insert_shard_metadata(conn, "shard2", "/path2.db", 200)
+    insert_shard_centroid(conn, "shard2", v2, 1.0)
+
+    insert_shard_metadata(conn, "shard3", "/path3.db", 300)
+    insert_shard_centroid(conn, "shard3", v3, 1.0)
+
+    Mosaic.ShardRouter.reset_state()
+
+    # Load shard1 and shard2 (query matches both)
+    query1 = [1.0, 1.0] ++ List.duplicate(0.0, 1534)
+    {:ok, _} = Mosaic.ShardRouter.find_similar_shards(query1, 2, vector_math_impl: TestVectorMath, min_similarity: 0.5)
+
+    # Re-access shard1 (moves to end of LRU)
+    {:ok, _} = Mosaic.ShardRouter.find_similar_shards(v1, 1, vector_math_impl: TestVectorMath, min_similarity: 0.99)
+
+    # Query for shard3 - cached shards have 0 similarity, forces DB lookup
+    {:ok, _} = Mosaic.ShardRouter.find_similar_shards(v3, 1, vector_math_impl: TestVectorMath, min_similarity: 0.99)
+
+    %{cache_keys: cache_keys} = Mosaic.ShardRouter.get_cache_state()
+    assert Enum.sort(cache_keys) == ["shard1", "shard3"]
+  end
+
   test "find_similar_shards returns shards from DB on cache miss", %{routing_db_path: routing_db_path} do
     {:ok, conn} = Exqlite.Sqlite3.open(routing_db_path)
     on_exit(fn -> Exqlite.Sqlite3.close(conn) end)

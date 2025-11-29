@@ -8,8 +8,11 @@ defmodule Mosaic.QueryEngineTest do
     temp_dir = Path.join(System.tmp_dir!(), "test_query_#{System.unique_integer([:positive])}")
     File.mkdir_p!(temp_dir)
     on_exit(fn -> File.rm_rf!(temp_dir) end)
-    
+
     # Check if QueryEngine is running
+    unless Process.whereis(Mosaic.QueryEngine) do
+      raise "QueryEngine not started - check application supervision"
+    end
     case Process.whereis(Mosaic.QueryEngine) do
       nil -> {:ok, skip: true, temp_dir: temp_dir}
       _pid -> {:ok, skip: false, temp_dir: temp_dir}
