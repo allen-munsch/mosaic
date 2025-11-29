@@ -37,7 +37,8 @@ defmodule Mosaic.MixProject do
       {:bumblebee, "~> 0.1"},
       {:exla, "~> 0.10.0"},
       {:mox, "~> 1.0", only: :test},
-      {:redix, "~> 1.0"}
+      {:redix, "~> 1.0"},
+      {:poolboy, "~> 1.5"}
     ]
   end
 

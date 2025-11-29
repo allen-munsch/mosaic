@@ -28,12 +28,8 @@ defmodule Mosaic.API do
     case conn.body_params do
       %{"query" => query} when is_binary(query) and byte_size(query) > 0 ->
         opts = extract_search_opts(conn.body_params)
-        case Mosaic.QueryEngine.search(query, opts) do
-          {:ok, results} ->
-            conn |> put_resp_content_type("application/json") |> send_resp(200, Jason.encode!(%{results: results}))
-          {:error, reason} ->
-            conn |> put_resp_content_type("application/json") |> send_resp(500, Jason.encode!(%{error: inspect(reason)}))
-        end
+        results = Mosaic.Search.perform_search(query, opts)
+        conn |> put_resp_content_type("application/json") |> send_resp(200, Jason.encode!(%{results: results}))
       %{"query" => ""} ->
         conn |> put_resp_content_type("application/json") |> send_resp(400, Jason.encode!(%{error: "Query cannot be empty"}))
       _ ->
@@ -45,12 +41,8 @@ defmodule Mosaic.API do
     case conn.body_params do
       %{"text" => text, "id" => id} when is_binary(text) ->
         metadata = Map.get(conn.body_params, "metadata", %{})
-        case Mosaic.Indexer.index_document(id, text, metadata) do
-          {:ok, result} ->
-            conn |> put_resp_content_type("application/json") |> send_resp(201, Jason.encode!(%{id: id, shard_id: result.shard_id, status: "indexed"}))
-          {:error, reason} ->
-            conn |> put_resp_content_type("application/json") |> send_resp(500, Jason.encode!(%{error: inspect(reason)}))
-        end
+        {:ok, result} = Mosaic.Indexer.index_document(id, text, metadata)
+        conn |> put_resp_content_type("application/json") |> send_resp(201, Jason.encode!(%{id: id, shard_id: result.shard_id, status: "indexed"}))
       %{"documents" => docs} when is_list(docs) ->
         documents = Enum.map(docs, fn d -> {d["id"], d["text"], Map.get(d, "metadata", %{})} end)
         case Mosaic.Indexer.index_documents(documents) do

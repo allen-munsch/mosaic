@@ -4,17 +4,17 @@ defmodule Mosaic.Indexer do
   """
   require Logger
 
-  @docs_per_shard 10_000
+
 
   def index_documents(documents, opts \\ []) do
     shard_id = Keyword.get(opts, :shard_id, generate_shard_id())
     shard_path = Keyword.get(opts, :shard_path, shard_path_for(shard_id))
 
     with {:ok, ^shard_path} <- Mosaic.StorageManager.create_shard(shard_path),
-         {:ok, conn} <- Mosaic.ConnectionPool.checkout(shard_path),
+         {:ok, conn} <- Mosaic.Resilience.checkout(shard_path),
          :ok <- insert_documents(conn, documents),
          :ok <- register_shard(shard_id, shard_path, documents) do
-      Mosaic.ConnectionPool.checkin(shard_path, conn)
+      Mosaic.Resilience.checkin(shard_path, conn)
       Logger.info("Indexed #{length(documents)} documents in shard #{shard_id}")
       {:ok, %{shard_id: shard_id, shard_path: shard_path, doc_count: length(documents)}}
     end
@@ -41,7 +41,7 @@ defmodule Mosaic.Indexer do
     :done = Exqlite.Sqlite3.step(conn, vss_stmt)
     Exqlite.Sqlite3.release(conn, vss_stmt)
 
-    Mosaic.ConnectionPool.checkin(shard_path, conn)
+    Mosaic.Resilience.checkin(shard_path, conn)
     {:ok, %{id: id, shard_id: shard_id}}
   end
 
@@ -94,6 +94,7 @@ defmodule Mosaic.Indexer do
       doc_count: length(documents),
       bloom_filter: bloom
     }})
+    Mosaic.QueryEngine.invalidate_cache(shard_id)
     :ok
   end
 
@@ -103,7 +104,7 @@ defmodule Mosaic.Indexer do
     shard_id = generate_shard_id()
     shard_path = shard_path_for(shard_id)
     {:ok, ^shard_path} = Mosaic.StorageManager.create_shard(shard_path)
-    {:ok, conn} = Mosaic.ConnectionPool.checkout(shard_path)
+    {:ok, conn} = Mosaic.Resilience.checkout(shard_path)
     {shard_id, shard_path, conn}
   end
 

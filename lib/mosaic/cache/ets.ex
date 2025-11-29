@@ -1,12 +1,18 @@
 defmodule Mosaic.Cache.ETS do
-  @behaviour Mosaic.Cache
+  @moduledoc """
+  An ETS-based cache implementation that conforms to the `Mosaic.Cache` behaviour.
+  """
   use GenServer
+  require Logger
+
+  @behaviour Mosaic.Cache
 
   @cleanup_interval :timer.minutes(1)
 
   # Server API
+  @impl Mosaic.Cache
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts, name: opts[:name])
+    GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
   @impl true
@@ -18,22 +24,22 @@ defmodule Mosaic.Cache.ETS do
   end
 
   # Client API
-  @impl true
+  @impl Mosaic.Cache
   def get(key, name \\__MODULE__) do
     GenServer.call(name, {:get, key})
   end
 
-  @impl true
+  @impl Mosaic.Cache
   def put(key, value, ttl, name \\__MODULE__) do
     GenServer.call(name, {:put, key, value, ttl})
   end
 
-  @impl true
+  @impl Mosaic.Cache
   def delete(key, name \\__MODULE__) do
     GenServer.call(name, {:delete, key})
   end
 
-  @impl true
+  @impl Mosaic.Cache
   def clear(name \\__MODULE__) do
     GenServer.call(name, :clear)
   end
@@ -51,7 +57,7 @@ defmodule Mosaic.Cache.ETS do
   # Server Callbacks
   @impl true
   def handle_call({:get, key}, _from, state) do
-    reply = 
+    reply =
       case :ets.lookup(state.table, key) do
         [{^key, value, expires_at}] ->
           if expires_at == :infinity or expires_at > System.system_time(:second) do
@@ -91,7 +97,6 @@ defmodule Mosaic.Cache.ETS do
 
   @impl true
   def handle_call({:get_many, keys}, from, state) do
-    # This can be long-running, so we handle it asynchronously
     spawn_link(fn ->
       results =
         keys
@@ -113,7 +118,7 @@ defmodule Mosaic.Cache.ETS do
   @impl true
   def handle_info(:cleanup, state) do
     now = System.system_time(:second)
-    :ets.select_delete(state.table, [{{:_, :_, :"$1"}, [{:"/=", :"$1", :infinity}, {:<, :"$1", now}], [true]}])
+    :ets.select_delete(state.table, [{{:_, :_, :""}, [{:"/=", :"", :infinity}, {:<, :"", now}], [true]}])
     schedule_cleanup()
     {:noreply, state}
   end

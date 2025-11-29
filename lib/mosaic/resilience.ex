@@ -1,6 +1,11 @@
-defmodule Mosaic.ConnectionPool do
+defmodule Mosaic.Resilience do
   use GenServer
   require Logger
+
+  @moduledoc """
+  This module provides common resilience strategies such as circuit breaking
+  and connection pooling.
+  """
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
@@ -10,15 +15,16 @@ defmodule Mosaic.ConnectionPool do
   def checkin(shard_path, conn), do: GenServer.cast(__MODULE__, {:checkin, shard_path, conn})
 
   def handle_call({:checkout, shard_path}, _from, state) do
-    case Map.get(state.connections, shard_path) do
-      nil ->
-        case open_with_extensions(shard_path) do
-          {:ok, conn} -> {:reply, {:ok, conn}, state}
-          error -> {:reply, error, state}
-        end
+    case Map.get(state.connections, shard_path, []) do
+      [] -> create_new_connection(shard_path, state)
       [conn | rest] ->
-        new_conns = Map.put(state.connections, shard_path, rest)
-        {:reply, {:ok, conn}, %{state | connections: new_conns}}
+        if connection_healthy?(conn) do
+          {:reply, {:ok, conn}, %{state | connections: Map.put(state.connections, shard_path, rest)}}
+        else
+          Exqlite.Sqlite3.close(conn)
+          # Recursively call handle_call to try getting another connection (or creating a new one)
+          handle_call({:checkout, shard_path}, nil, %{state | connections: Map.put(state.connections, shard_path, rest)})
+        end
     end
   end
 
@@ -31,6 +37,22 @@ defmodule Mosaic.ConnectionPool do
       state.connections
     end
     {:noreply, %{state | connections: new_conns}}
+  end
+
+  defp connection_healthy?(conn) do
+    case Exqlite.Sqlite3.execute(conn, "SELECT 1") do
+      :ok -> true
+      _ -> false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp create_new_connection(shard_path, state) do
+    case open_with_extensions(shard_path) do
+      {:ok, conn} -> {:reply, {:ok, conn}, state}
+      error -> {:reply, error, state}
+    end
   end
 
   defp open_with_extensions(shard_path) do

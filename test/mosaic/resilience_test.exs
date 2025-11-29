@@ -1,10 +1,10 @@
-defmodule Mosaic.ConnectionPoolTest do
+defmodule Mosaic.ResilienceTest do
   use ExUnit.Case, async: false
 
   setup do
     # Ensure ConnectionPool is running
     case Process.whereis(Mosaic.ConnectionPool) do
-      nil -> Mosaic.ConnectionPool.start_link([])
+      nil -> Mosaic.Resilience.start_link([])
       _pid -> :ok
     end
 
@@ -20,41 +20,41 @@ defmodule Mosaic.ConnectionPoolTest do
 
   describe "checkout/1" do
     test "returns connection for valid shard path", %{shard_path: shard_path} do
-      assert {:ok, conn} = Mosaic.ConnectionPool.checkout(shard_path)
+      assert {:ok, conn} = Mosaic.Resilience.checkout(shard_path)
       assert is_reference(conn)
-      Mosaic.ConnectionPool.checkin(shard_path, conn)
+      Mosaic.Resilience.checkin(shard_path, conn)
     end
 
     test "returns error for non-existent path" do
-      assert {:error, _} = Mosaic.ConnectionPool.checkout("/nonexistent/path.db")
+      assert {:error, _} = Mosaic.Resilience.checkout("/nonexistent/path.db")
     end
 
     test "can checkout multiple connections", %{shard_path: shard_path} do
-      {:ok, conn1} = Mosaic.ConnectionPool.checkout(shard_path)
-      {:ok, conn2} = Mosaic.ConnectionPool.checkout(shard_path)
+      {:ok, conn1} = Mosaic.Resilience.checkout(shard_path)
+      {:ok, conn2} = Mosaic.Resilience.checkout(shard_path)
       assert is_reference(conn1)
       assert is_reference(conn2)
-      Mosaic.ConnectionPool.checkin(shard_path, conn1)
-      Mosaic.ConnectionPool.checkin(shard_path, conn2)
+      Mosaic.Resilience.checkin(shard_path, conn1)
+      Mosaic.Resilience.checkin(shard_path, conn2)
     end
   end
 
   describe "checkin/2" do
     test "returns connection to pool for reuse", %{shard_path: shard_path} do
-      {:ok, conn1} = Mosaic.ConnectionPool.checkout(shard_path)
-      Mosaic.ConnectionPool.checkin(shard_path, conn1)
+      {:ok, conn1} = Mosaic.Resilience.checkout(shard_path)
+      Mosaic.Resilience.checkin(shard_path, conn1)
       Process.sleep(10)
-      {:ok, conn2} = Mosaic.ConnectionPool.checkout(shard_path)
+      {:ok, conn2} = Mosaic.Resilience.checkout(shard_path)
       assert is_reference(conn2)
-      Mosaic.ConnectionPool.checkin(shard_path, conn2)
+      Mosaic.Resilience.checkin(shard_path, conn2)
     end
 
     test "handles multiple checkins", %{shard_path: shard_path} do
       conns = for _ <- 1..3 do
-        {:ok, conn} = Mosaic.ConnectionPool.checkout(shard_path)
+        {:ok, conn} = Mosaic.Resilience.checkout(shard_path)
         conn
       end
-      Enum.each(conns, &Mosaic.ConnectionPool.checkin(shard_path, &1))
+      Enum.each(conns, &Mosaic.Resilience.checkin(shard_path, &1))
       assert true
     end
   end
@@ -62,10 +62,10 @@ defmodule Mosaic.ConnectionPoolTest do
   describe "pool limits" do
     test "respects max_per_shard limit", %{shard_path: shard_path} do
       conns = for _ <- 1..7 do
-        {:ok, conn} = Mosaic.ConnectionPool.checkout(shard_path)
+        {:ok, conn} = Mosaic.Resilience.checkout(shard_path)
         conn
       end
-      Enum.each(conns, &Mosaic.ConnectionPool.checkin(shard_path, &1))
+      Enum.each(conns, &Mosaic.Resilience.checkin(shard_path, &1))
       Process.sleep(50)
       assert true
     end

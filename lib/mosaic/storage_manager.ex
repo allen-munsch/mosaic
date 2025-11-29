@@ -38,17 +38,17 @@ defmodule Mosaic.StorageManager do
   end
 
   def handle_call({:open_shard, path}, _from, state) do
-    case Mosaic.ConnectionPool.checkout(path) do
+    case Mosaic.Resilience.checkout(path) do
       {:ok, conn} -> {:reply, {:ok, conn}, state}
       error -> {:reply, error, state}
     end
   end
 
   def handle_call({:get_shard_doc_count, path}, _from, state) do
-    case Mosaic.ConnectionPool.checkout(path) do
+    case Mosaic.Resilience.checkout(path) do
       {:ok, conn} ->
         count = query_scalar(conn, "SELECT COUNT(*) FROM documents;")
-        Mosaic.ConnectionPool.checkin(path, conn)
+        Mosaic.Resilience.checkin(path, conn)
         {:reply, {:ok, count}, state}
       error ->
         {:reply, error, state}

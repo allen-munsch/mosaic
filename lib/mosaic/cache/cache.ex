@@ -9,6 +9,7 @@ defmodule Mosaic.Cache do
   @type ttl :: pos_integer() | :infinity
   @type name :: atom() | pid()
 
+  @callback start_link(opts :: keyword()) :: {:ok, pid()} | {:error, any()}
   @callback get(key(), name) :: {:ok, value()} | :miss | {:error, term()}
   @callback put(key(), value(), ttl(), name) :: :ok | {:error, term()}
   @callback delete(key(), name) :: :ok | {:error, term()}

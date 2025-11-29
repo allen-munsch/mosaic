@@ -1,9 +1,15 @@
 defmodule Mosaic.Cache.Redis do
-  @behaviour Mosaic.Cache
+  @moduledoc """
+  A Redis-based cache implementation that conforms to the `Mosaic.Cache` behaviour.
+  """
   use GenServer
+  require Logger
 
+  @behaviour Mosaic.Cache
+
+  @impl Mosaic.Cache
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts, name: opts[:name])
+    GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
   @impl true
@@ -13,29 +19,29 @@ defmodule Mosaic.Cache.Redis do
     {:ok, %{conn: conn}}
   end
 
-  @impl true
+  @impl Mosaic.Cache
   def get(key, name \\__MODULE__) do
     GenServer.call(name, {:get, key})
   end
 
-  @impl true
+  @impl Mosaic.Cache
   def put(key, value, ttl, name \\__MODULE__) do
     GenServer.call(name, {:put, key, value, ttl})
   end
 
-  @impl true
+  @impl Mosaic.Cache
   def delete(key, name \\__MODULE__) do
     GenServer.call(name, {:delete, key})
   end
 
-  @impl true
+  @impl Mosaic.Cache
   def clear(name \\__MODULE__) do
     GenServer.call(name, :clear)
   end
 
   @impl true
   def handle_call({:get, key}, _from, %{conn: conn} = state) do
-    result = 
+    result =
       case Redix.command(conn, ["GET", key]) do
         {:ok, nil} -> :miss
         {:ok, value} -> {:ok, Jason.decode!(value)}
@@ -47,7 +53,7 @@ defmodule Mosaic.Cache.Redis do
   @impl true
   def handle_call({:put, key, value, ttl}, _from, %{conn: conn} = state) do
     encoded = Jason.encode!(value)
-    result = 
+    result =
       case ttl do
         :infinity -> Redix.command(conn, ["SET", key, encoded])
         seconds -> Redix.command(conn, ["SETEX", key, seconds, encoded])

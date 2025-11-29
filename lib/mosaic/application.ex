@@ -39,7 +39,8 @@ defmodule Mosaic.Application do
 
       # Storage layer and configuration. Config is started manually above.
       {Mosaic.StorageManager, []},
-      {Mosaic.ConnectionPool, []},
+      {Mosaic.Resilience, []},
+      Mosaic.WorkerPool.child_spec(name: :router_pool, worker: Mosaic.ShardRouter.Worker, size: 10),
 
       # Start the selected cache implementation
       cache_child_spec(cache_impl),
@@ -60,7 +61,7 @@ defmodule Mosaic.Application do
          cache_ttl: Mosaic.Config.get(:query_cache_ttl_seconds),
          ranker: Mosaic.Ranking.Ranker.new(ranker_opts)
        ]},
-      {Mosaic.CircuitBreaker, []},
+
 
       # Crawling pipeline
       {Mosaic.CrawlerSupervisor, []},
