@@ -1,0 +1,124 @@
+defmodule Mosaic.Cache.ETS do
+  @behaviour Mosaic.Cache
+  use GenServer
+
+  @cleanup_interval :timer.minutes(1)
+
+  # Server API
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, opts, name: opts[:name])
+  end
+
+  @impl true
+  def init(opts) do
+    table_name = Keyword.get(opts, :table, __MODULE__)
+    :ets.new(table_name, [:set, :public, :named_table, read_concurrency: true])
+    schedule_cleanup()
+    {:ok, %{table: table_name}}
+  end
+
+  # Client API
+  @impl true
+  def get(key, name \\__MODULE__) do
+    GenServer.call(name, {:get, key})
+  end
+
+  @impl true
+  def put(key, value, ttl, name \\__MODULE__) do
+    GenServer.call(name, {:put, key, value, ttl})
+  end
+
+  @impl true
+  def delete(key, name \\__MODULE__) do
+    GenServer.call(name, {:delete, key})
+  end
+
+  @impl true
+  def clear(name \\__MODULE__) do
+    GenServer.call(name, :clear)
+  end
+
+  @impl true
+  def get_many(keys, name \\__MODULE__) do
+    GenServer.call(name, {:get_many, keys})
+  end
+
+  @impl true
+  def put_many(entries, ttl, name \\__MODULE__) do
+    GenServer.call(name, {:put_many, entries, ttl})
+  end
+
+  # Server Callbacks
+  @impl true
+  def handle_call({:get, key}, _from, state) do
+    reply = 
+      case :ets.lookup(state.table, key) do
+        [{^key, value, expires_at}] ->
+          if expires_at == :infinity or expires_at > System.system_time(:second) do
+            {:ok, value}
+          else
+            :ets.delete(state.table, key)
+            :miss
+          end
+        [] ->
+          :miss
+      end
+    {:reply, reply, state}
+  end
+
+  @impl true
+  def handle_call({:put, key, value, ttl}, _from, state) do
+    expires_at =
+      case ttl do
+        :infinity -> :infinity
+        seconds -> System.system_time(:second) + seconds
+      end
+    :ets.insert(state.table, {key, value, expires_at})
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call({:delete, key}, _from, state) do
+    :ets.delete(state.table, key)
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call(:clear, _from, state) do
+    :ets.delete_all_objects(state.table)
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call({:get_many, keys}, from, state) do
+    # This can be long-running, so we handle it asynchronously
+    spawn_link(fn ->
+      results =
+        keys
+        |> Enum.map(fn key -> {key, GenServer.call(self(), {:get, key})} end)
+        |> Enum.filter(fn {_, result} -> match?({:ok, _}, result) end)
+        |> Enum.map(fn {key, {:ok, value}} -> {key, value} end)
+        |> Map.new()
+      GenServer.reply(from, results)
+    end)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_call({:put_many, entries, ttl}, _from, state) do
+    Enum.each(entries, fn {key, value} -> GenServer.call(self(), {:put, key, value, ttl}) end)
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_info(:cleanup, state) do
+    now = System.system_time(:second)
+    :ets.select_delete(state.table, [{{:_, :_, :"$1"}, [{:"/=", :"$1", :infinity}, {:<, :"$1", now}], [true]}])
+    schedule_cleanup()
+    {:noreply, state}
+  end
+
+  defp schedule_cleanup do
+    Process.send_after(self(), :cleanup, @cleanup_interval)
+  end
+end

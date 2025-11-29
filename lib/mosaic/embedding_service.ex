@@ -25,9 +25,7 @@ defmodule Mosaic.EmbeddingService do
 
     model_ref = case model_type do
       "local" ->
-        with {:ok, model_info} = Bumblebee.load_model({:hf, "bert-base-uncased"}),
-             {:ok, tokenizer} = Bumblebee.load_tokenizer({:hf, "bert-base-uncased"}),
-             {:ok, model_info} = Bumblebee.load_model({:hf, "sentence-transformers/all-MiniLM-L6-v2"}),
+        with {:ok, model_info} = Bumblebee.load_model({:hf, "sentence-transformers/all-MiniLM-L6-v2"}),
              {:ok, tokenizer} = Bumblebee.load_tokenizer({:hf, "sentence-transformers/all-MiniLM-L6-v2"}) do
           serving = Bumblebee.Text.text_embedding(model_info, tokenizer)
           %{model: serving, tokenizer: tokenizer}
@@ -191,7 +189,7 @@ defmodule Mosaic.EmbeddingService do
   defp generate_local_embeddings(texts, %{model: serving, tokenizer: _tokenizer}) do
     Logger.info("Generating local embeddings using Bumblebee...")
     serving_output = Nx.Serving.run(serving, texts)
-    
+
     Enum.map(serving_output, fn %{embedding: tensor_embedding} ->
       Nx.to_list(tensor_embedding)
     end)
