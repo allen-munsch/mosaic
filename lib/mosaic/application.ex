@@ -12,6 +12,7 @@ defmodule Mosaic.Application do
   def start(_type, _args) do
     Logger.info("Starting MosaicDB")
     {:ok, _} = Mosaic.Config.start_link()
+    configure_nx_backend()
 
     children = [
       # Cluster coordination
@@ -19,7 +20,7 @@ defmodule Mosaic.Application do
 
       # Storage layer
       {Mosaic.StorageManager, []},
-      {Mosaic.ConnectionPool, []},  # ADD THIS
+      {Mosaic.ConnectionPool, []},
 
       Mosaic.WorkerPool.child_spec(name: :router_pool, worker: Mosaic.ShardRouter.Worker, size: 10),
 
@@ -34,6 +35,9 @@ defmodule Mosaic.Application do
       # Embeddings
       {Mosaic.EmbeddingService, []},
       {Mosaic.EmbeddingCache, []},
+
+      # Indexer (manages active shard for document ingestion)
+      {Mosaic.Indexer, []},
 
       # HOT PATH: Query engine (SQLite + sqlite-vec)
       {Mosaic.QueryEngine, [
@@ -62,6 +66,22 @@ defmodule Mosaic.Application do
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Mosaic.Supervisor)
+  end
+
+  defp configure_nx_backend do
+    case Mosaic.Config.get(:nx_backend) do
+      "exla" ->
+        client = case Mosaic.Config.get(:nx_client) do
+          "cuda" -> :cuda
+          "host" -> :host
+          _ -> :host
+        end
+        Nx.default_backend({EXLA.Backend, client: client})
+      "binary" ->
+        Nx.default_backend(Nx.BinaryBackend)
+      _ ->
+        Nx.default_backend(EXLA.Backend)
+    end
   end
 
   defp cache_module do

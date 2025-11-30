@@ -97,6 +97,6 @@ defmodule Mosaic.ConnectionPool do
   end
 
   defp sqlite_vec_path do
-    System.get_env("SQLITE_VEC_PATH") || "deps/sqlite_vec/priv/vec0"
+    System.get_env("SQLITE_VEC_PATH") || "deps/sqlite_vec/priv/0.1.5/vec0"
   end
 end

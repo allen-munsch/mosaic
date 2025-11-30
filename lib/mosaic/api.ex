@@ -86,7 +86,7 @@ defmodule Mosaic.API do
       %{"text" => text, "id" => id} ->
         metadata = Map.get(conn.body_params, "metadata", %{})
         {:ok, result} = Mosaic.Indexer.index_document(id, text, metadata)
-        json_ok(conn, 201, %{id: id, shard_id: result.shard_id, status: "indexed"})
+        json_ok(conn, 201, %{id: result.id, status: result.status})
 
       %{"documents" => docs} when is_list(docs) ->
         documents = Enum.map(docs, fn d -> {d["id"], d["text"], Map.get(d, "metadata", %{})} end)
@@ -100,14 +100,15 @@ defmodule Mosaic.API do
     end
   end
 
-
-
-  # Admin
   get "/api/shards" do
     shards = Mosaic.ShardRouter.list_all_shards()
+    |> Enum.map(fn shard ->
+      shard
+      |> Map.drop([:centroid, :centroid_norm])
+      |> Map.take([:id, :path, :doc_count, :query_count])
+    end)
     json_ok(conn, %{shards: shards, count: length(shards)})
   end
-
 
 
   post "/api/admin/refresh-duckdb" do

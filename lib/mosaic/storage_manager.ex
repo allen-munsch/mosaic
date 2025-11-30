@@ -93,7 +93,14 @@ defmodule Mosaic.StorageManager do
   end
 
   defp sqlite_vec_path do
-    System.get_env("SQLITE_VEC_PATH") || "deps/sqlite_vec/priv/vec0"
+    System.get_env("SQLITE_VEC_PATH") || find_sqlite_vec()
+  end
+
+  defp find_sqlite_vec do
+    case Path.wildcard("deps/sqlite_vec/priv/**/vec0.so") do
+      [path | _] -> String.trim_trailing(path, ".so")
+      [] -> "deps/sqlite_vec/priv/vec0"
+    end
   end
 
   defp create_schema(conn) do

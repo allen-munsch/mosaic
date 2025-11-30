@@ -24,21 +24,11 @@ defmodule Mosaic.EmbeddingService do
     batch_timeout_ms = Mosaic.Config.get(:embedding_batch_timeout_ms)
 
     model_ref = case model_type do
-      "local" ->
-        with {:ok, model_info} = Bumblebee.load_model({:hf, "sentence-transformers/all-MiniLM-L6-v2"}),
-             {:ok, tokenizer} = Bumblebee.load_tokenizer({:hf, "sentence-transformers/all-MiniLM-L6-v2"}) do
-          serving = Bumblebee.Text.text_embedding(model_info, tokenizer)
-          %{model: serving, tokenizer: tokenizer}
-        end
+      "local" -> create_local_serving()
       "openai" -> :openai
       "huggingface" -> :huggingface
-      _ -> # Fallback to default local model
-        with {:ok, model_info} = Bumblebee.load_model({:hf, "sentence-transformers/all-MiniLM-L6-v2"}),
-             {:ok, tokenizer} = Bumblebee.load_tokenizer({:hf, "sentence-transformers/all-MiniLM-L6-v2"}) do
-          serving = Bumblebee.Text.text_embedding(model_info, tokenizer)
-          %{model: serving, tokenizer: tokenizer}
-        end
-    end
+      _ -> create_local_serving() # Fallback to default local model
+    end # <--- This end closes the case statement
 
     state = %State{
       model_type: model_type,
@@ -51,6 +41,17 @@ defmodule Mosaic.EmbeddingService do
     }
 
     {:ok, state}
+  end
+
+  defp create_local_serving do
+    {:ok, model_info} = Bumblebee.load_model({:hf, "sentence-transformers/all-MiniLM-L6-v2"})
+    {:ok, tokenizer} = Bumblebee.load_tokenizer({:hf, "sentence-transformers/all-MiniLM-L6-v2"})
+
+    serving = Bumblebee.Text.text_embedding(model_info, tokenizer,
+      compile: [batch_size: 32, sequence_length: 256],  # Added sequence_length
+      defn_options: [compiler: EXLA]
+    )
+    %{model: serving, tokenizer: tokenizer}
   end
 
   def encode(text) when is_binary(text) do

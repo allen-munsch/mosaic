@@ -17,6 +17,8 @@ defmodule Mosaic.Config do
     config = %{
       storage_path: System.get_env("STORAGE_PATH") || "/tmp/mosaic/shards",
       routing_db_path: System.get_env("ROUTING_DB_PATH") || "/tmp/mosaic/routing/index.db",
+      nx_backend: System.get_env("NX_BACKEND", "exla"),
+      nx_client: System.get_env("NX_CLIENT"),  # nil, "cuda", or "host"
       cache_path: System.get_env("CACHE_PATH") || "/tmp/mosaic/cache",
       embedding_model: System.get_env("EMBEDDING_MODEL") || "local",
       embedding_dim: parse_int(System.get_env("EMBEDDING_DIM"), 384),

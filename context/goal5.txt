@@ -1,0 +1,606 @@
+## Phase 2.6: GIS Extension (2-3 weeks)
+
+**Goal:** Spatial queries, geofencing, location-aware semantic search
+
+### 2.6.1 Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      GIS Extension                               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐          │
+│  │ SpatiaLite  │    │ Geometry    │    │ Coord       │          │
+│  │ (R-tree)    │    │ Parser      │    │ Transform   │          │
+│  └─────────────┘    └─────────────┘    └─────────────┘          │
+│         │                 │                   │                  │
+│         ▼                 ▼                   ▼                  │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                   Spatial Index                          │    │
+│  │  • R-tree for bounding boxes                            │    │
+│  │  • Point index for nearest neighbor                     │    │
+│  │  • Polygon index for containment                        │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│         │                                                        │
+│         ▼                                                        │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                 Hybrid Query Engine                      │    │
+│  │  • Spatial + Semantic ("cafes near me with good coffee")│    │
+│  │  • Spatial + Graph ("offices within 5km connected to X")│    │
+│  │  • Geofencing + RBAC ("files accessible in this region")│    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 2.6.2 Schema
+
+```sql
+-- Load SpatiaLite extension
+SELECT load_extension('mod_spatialite');
+SELECT InitSpatialMetaData(1);
+
+-- Spatial metadata for any node
+CREATE TABLE geo_locations (
+  id TEXT PRIMARY KEY,
+  node_id TEXT NOT NULL,              -- FK to documents/nodes
+  name TEXT,
+  location_type TEXT,                 -- point, polygon, line, etc.
+  properties TEXT,                    -- JSON metadata
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (node_id) REFERENCES documents(id)
+);
+
+-- Add geometry column (SpatiaLite way)
+SELECT AddGeometryColumn('geo_locations', 'geom', 4326, 'GEOMETRY', 'XY');
+
+-- Spatial index (R-tree)
+SELECT CreateSpatialIndex('geo_locations', 'geom');
+
+-- Regions/Geofences
+CREATE TABLE geo_regions (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  region_type TEXT,                   -- city, country, custom, geofence
+  properties TEXT,
+  parent_region_id TEXT,
+  FOREIGN KEY (parent_region_id) REFERENCES geo_regions(id)
+);
+SELECT AddGeometryColumn('geo_regions', 'geom', 4326, 'MULTIPOLYGON', 'XY');
+SELECT CreateSpatialIndex('geo_regions', 'geom');
+
+-- Spatial edges (routes, connections)
+CREATE TABLE geo_edges (
+  id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  edge_type TEXT,                     -- route, cable, pipeline, etc.
+  distance_m REAL,                    -- computed distance
+  properties TEXT,
+  FOREIGN KEY (source_id) REFERENCES geo_locations(id),
+  FOREIGN KEY (target_id) REFERENCES geo_locations(id)
+);
+SELECT AddGeometryColumn('geo_edges', 'geom', 4326, 'LINESTRING', 'XY');
+SELECT CreateSpatialIndex('geo_edges', 'geom');
+
+-- Spatial access rules (RBAC integration)
+CREATE TABLE geo_access_rules (
+  id TEXT PRIMARY KEY,
+  role_id TEXT NOT NULL,
+  region_id TEXT,                     -- optional: restrict to region
+  effect TEXT DEFAULT 'allow',        -- allow/deny
+  conditions TEXT                     -- JSON: time-based, etc.
+);
+```
+
+### 2.6.3 Extension Module
+
+```elixir
+defmodule Mosaic.Extensions.GIS do
+  @behaviour Mosaic.Extension
+  
+  @impl true
+  def id, do: :gis
+  
+  @impl true
+  def name, do: "GIS Extension"
+  
+  @impl true
+  def version, do: "0.1.0"
+  
+  @impl true
+  def description, do: "Spatial queries, geofencing, and location-aware search"
+  
+  @impl true
+  def supports?(mime_type, _path) do
+    mime_type in [
+      "application/geo+json",
+      "application/vnd.google-earth.kml+xml",
+      "application/gpx+xml",
+      "application/x-shapefile"
+    ]
+  end
+  
+  @impl true
+  def extract(content, metadata) do
+    case metadata[:mime_type] do
+      "application/geo+json" -> parse_geojson(content)
+      "application/vnd.google-earth.kml+xml" -> parse_kml(content)
+      "application/gpx+xml" -> parse_gpx(content)
+      _ -> {:error, :unsupported_format}
+    end
+  end
+  
+  @impl true
+  def query_types do
+    [
+      :near,           # Find items near a point
+      :within,         # Find items within a polygon
+      :intersects,     # Find items that intersect geometry
+      :distance,       # Calculate distances
+      :route,          # Find routes between points
+      :geofence,       # Check geofence containment
+      :spatial_join,   # Join on spatial relationship
+      :cluster         # Cluster nearby points
+    ]
+  end
+  
+  @impl true
+  def execute_query(query_type, query, opts) do
+    Mosaic.Extensions.GIS.Query.execute(query_type, query, opts)
+  end
+  
+  @impl true
+  def schema_migrations do
+    [
+      "priv/extensions/gis/migrations/001_create_geo_tables.sql",
+      "priv/extensions/gis/migrations/002_create_spatial_indexes.sql"
+    ]
+  end
+end
+```
+
+### 2.6.4 Query Engine
+
+```elixir
+defmodule Mosaic.Extensions.GIS.Query do
+  @moduledoc "Spatial query execution"
+  
+  # Find items within distance of a point
+  def execute(:near, %{lat: lat, lon: lon, radius_m: radius}, opts) do
+    limit = opts[:limit] || 100
+    
+    # Use SpatiaLite's distance functions with R-tree optimization
+    sql = """
+    SELECT 
+      gl.node_id,
+      gl.name,
+      gl.properties,
+      ST_Distance(gl.geom, MakePoint(?, ?, 4326), 1) as distance_m,
+      ST_AsGeoJSON(gl.geom) as geometry
+    FROM geo_locations gl
+    WHERE gl.rowid IN (
+      SELECT rowid FROM SpatialIndex
+      WHERE f_table_name = 'geo_locations'
+        AND f_geometry_column = 'geom'
+        AND search_frame = BuildCircleMbr(?, ?, ?, 4326)
+    )
+    AND ST_Distance(gl.geom, MakePoint(?, ?, 4326), 1) <= ?
+    ORDER BY distance_m
+    LIMIT ?
+    """
+    
+    Mosaic.FederatedQuery.execute(
+      sql,
+      [lon, lat, lon, lat, radius, lon, lat, radius, limit],
+      opts
+    )
+  end
+  
+  # Find items within a polygon
+  def execute(:within, %{polygon: polygon_geojson}, opts) do
+    sql = """
+    SELECT 
+      gl.node_id,
+      gl.name,
+      gl.properties,
+      ST_AsGeoJSON(gl.geom) as geometry
+    FROM geo_locations gl
+    WHERE gl.rowid IN (
+      SELECT rowid FROM SpatialIndex
+      WHERE f_table_name = 'geo_locations'
+        AND f_geometry_column = 'geom'
+        AND search_frame = ST_Envelope(GeomFromGeoJSON(?))
+    )
+    AND ST_Within(gl.geom, GeomFromGeoJSON(?))
+    """
+    
+    Mosaic.FederatedQuery.execute(sql, [polygon_geojson, polygon_geojson], opts)
+  end
+  
+  # Geofence check
+  def execute(:geofence, %{lat: lat, lon: lon, region_ids: region_ids}, opts) do
+    placeholders = Enum.map_join(1..length(region_ids), ",", fn _ -> "?" end)
+    
+    sql = """
+    SELECT 
+      gr.id,
+      gr.name,
+      gr.region_type,
+      ST_Contains(gr.geom, MakePoint(?, ?, 4326)) as is_inside
+    FROM geo_regions gr
+    WHERE gr.id IN (#{placeholders})
+    """
+    
+    Mosaic.FederatedQuery.execute(sql, [lon, lat | region_ids], opts)
+  end
+  
+  # Spatial clustering (DBSCAN-style)
+  def execute(:cluster, %{eps_m: eps, min_points: min_pts}, opts) do
+    sql = """
+    WITH clusters AS (
+      SELECT 
+        gl.node_id,
+        ST_ClusterDBSCAN(gl.geom, ?, ?) OVER() as cluster_id,
+        gl.geom
+      FROM geo_locations gl
+    )
+    SELECT 
+      cluster_id,
+      COUNT(*) as point_count,
+      ST_AsGeoJSON(ST_Centroid(ST_Collect(geom))) as centroid,
+      ST_AsGeoJSON(ST_ConvexHull(ST_Collect(geom))) as hull
+    FROM clusters
+    WHERE cluster_id IS NOT NULL
+    GROUP BY cluster_id
+    ORDER BY point_count DESC
+    """
+    
+    Mosaic.FederatedQuery.execute(sql, [eps, min_pts], opts)
+  end
+  
+  # K-nearest neighbors
+  def execute(:knn, %{lat: lat, lon: lon, k: k}, opts) do
+    sql = """
+    SELECT 
+      gl.node_id,
+      gl.name,
+      ST_Distance(gl.geom, MakePoint(?, ?, 4326), 1) as distance_m
+    FROM geo_locations gl
+    ORDER BY gl.geom <-> MakePoint(?, ?, 4326)
+    LIMIT ?
+    """
+    
+    Mosaic.FederatedQuery.execute(sql, [lon, lat, lon, lat, k], opts)
+  end
+  
+  # Route finding (if network data exists)
+  def execute(:route, %{from: from_id, to: to_id}, opts) do
+    # Use geo_edges as a graph, apply Dijkstra
+    # This would use VirtualNetwork or custom implementation
+  end
+end
+```
+
+### 2.6.5 Hybrid Queries (Spatial + Semantic)
+
+```elixir
+defmodule Mosaic.Extensions.GIS.Hybrid do
+  @moduledoc "Combine spatial and semantic search"
+  
+  # "Find Italian restaurants within 2km"
+  def search_near(query_text, lat, lon, radius_m, opts \\ []) do
+    # 1. Semantic search for query
+    embedding = Mosaic.EmbeddingService.encode(query_text)
+    
+    # 2. Combined query
+    sql = """
+    WITH semantic_matches AS (
+      SELECT 
+        rowid,
+        distance as semantic_distance
+      FROM vss_vectors 
+      WHERE vss_search(vec, ?) 
+      LIMIT 1000
+    ),
+    spatial_filtered AS (
+      SELECT 
+        d.id,
+        d.text,
+        d.metadata,
+        sm.semantic_distance,
+        gl.name as location_name,
+        ST_Distance(gl.geom, MakePoint(?, ?, 4326), 1) as distance_m,
+        ST_AsGeoJSON(gl.geom) as geometry
+      FROM semantic_matches sm
+      JOIN documents d ON d.rowid = sm.rowid
+      JOIN geo_locations gl ON gl.node_id = d.id
+      WHERE gl.rowid IN (
+        SELECT rowid FROM SpatialIndex
+        WHERE f_table_name = 'geo_locations'
+          AND search_frame = BuildCircleMbr(?, ?, ?, 4326)
+      )
+      AND ST_Distance(gl.geom, MakePoint(?, ?, 4326), 1) <= ?
+    )
+    SELECT 
+      *,
+      (1.0 / (1.0 + semantic_distance)) * (1.0 - (distance_m / ?)) as combined_score
+    FROM spatial_filtered
+    ORDER BY combined_score DESC
+    LIMIT ?
+    """
+    
+    embedding_json = Jason.encode!(embedding)
+    limit = opts[:limit] || 20
+    
+    Mosaic.FederatedQuery.execute(
+      sql,
+      [embedding_json, lon, lat, lon, lat, radius_m, lon, lat, radius_m, radius_m, limit],
+      opts
+    )
+  end
+  
+  # "Find documents about this project from the NYC office"
+  def search_in_region(query_text, region_id, opts \\ []) do
+    embedding = Mosaic.EmbeddingService.encode(query_text)
+    
+    sql = """
+    WITH region AS (
+      SELECT geom FROM geo_regions WHERE id = ?
+    ),
+    semantic_matches AS (
+      SELECT rowid, distance as semantic_distance
+      FROM vss_vectors 
+      WHERE vss_search(vec, ?) 
+      LIMIT 1000
+    )
+    SELECT 
+      d.id,
+      d.text,
+      d.metadata,
+      sm.semantic_distance,
+      gl.name as location_name
+    FROM semantic_matches sm
+    JOIN documents d ON d.rowid = sm.rowid
+    JOIN geo_locations gl ON gl.node_id = d.id
+    JOIN region r ON ST_Within(gl.geom, r.geom)
+    ORDER BY sm.semantic_distance
+    LIMIT ?
+    """
+    
+    Mosaic.FederatedQuery.execute(
+      sql,
+      [region_id, Jason.encode!(embedding), opts[:limit] || 20],
+      opts
+    )
+  end
+end
+```
+
+### 2.6.6 High-Level API
+
+```elixir
+defmodule Mosaic.Geo do
+  @moduledoc "High-level GIS API"
+  
+  alias Mosaic.Extensions.GIS.{Query, Hybrid}
+  
+  # Basic spatial operations
+  def near(lat, lon, radius_m, opts \\ [])
+  def within(polygon_geojson, opts \\ [])
+  def intersects(geometry, opts \\ [])
+  def distance(from, to)
+  
+  # Geofencing
+  def in_region?(lat, lon, region_id)
+  def regions_containing(lat, lon)
+  def create_geofence(name, polygon, opts \\ [])
+  
+  # Hybrid search
+  def search_near(query, lat, lon, radius_m, opts \\ [])
+  def search_in_region(query, region_id, opts \\ [])
+  def search_along_route(query, route_geometry, buffer_m, opts \\ [])
+  
+  # Location management
+  def add_location(node_id, lat, lon, opts \\ [])
+  def add_location(node_id, geojson, opts \\ [])
+  def update_location(location_id, geojson)
+  def delete_location(location_id)
+  
+  # Bulk operations
+  def import_geojson(geojson_file, opts \\ [])
+  def import_shapefile(shp_file, opts \\ [])
+  def export_geojson(query, opts \\ [])
+  
+  # Analytics
+  def cluster(opts \\ [])
+  def heatmap(bounds, resolution, opts \\ [])
+  def density(polygon, opts \\ [])
+  
+  # Example usage
+  def examples do
+    # Find cafes within 500m
+    near(40.7128, -74.0060, 500)
+    
+    # Semantic + spatial
+    search_near("quiet coffee shops with wifi", 40.7128, -74.0060, 1000)
+    
+    # Check if user is in allowed region
+    in_region?(user_lat, user_lon, "office_nyc")
+    
+    # Find all documents from a region
+    search_in_region("Q4 sales reports", "region_northeast")
+    
+    # Cluster analysis
+    cluster(eps_m: 100, min_points: 5)
+  end
+end
+```
+
+### 2.6.7 RBAC + GIS Integration
+
+```elixir
+defmodule Mosaic.RBAC.Geo do
+  @moduledoc "Location-aware access control"
+  
+  # Check if user can access resource based on location
+  def can_access?(user_id, resource_id, user_location) do
+    with {:ok, user_roles} <- get_user_roles(user_id),
+         {:ok, geo_rules} <- get_geo_rules(user_roles),
+         {:ok, resource_location} <- get_resource_location(resource_id) do
+      evaluate_geo_rules(geo_rules, user_location, resource_location)
+    end
+  end
+  
+  # Example rules:
+  # - User can only access files when in office
+  # - Data from region X can only be viewed from region X
+  # - Sensitive docs require being within corporate network
+  
+  def evaluate_geo_rules(rules, user_loc, resource_loc) do
+    Enum.all?(rules, fn rule ->
+      case rule do
+        %{type: :user_in_region, region_id: region} ->
+          Mosaic.Geo.in_region?(user_loc.lat, user_loc.lon, region)
+          
+        %{type: :same_region} ->
+          user_regions = Mosaic.Geo.regions_containing(user_loc.lat, user_loc.lon)
+          resource_regions = Mosaic.Geo.regions_containing(resource_loc.lat, resource_loc.lon)
+          not Enum.empty?(MapSet.intersection(user_regions, resource_regions))
+          
+        %{type: :max_distance, meters: max_m} ->
+          Mosaic.Geo.distance(user_loc, resource_loc) <= max_m
+          
+        _ -> true
+      end
+    end)
+  end
+end
+```
+
+### 2.6.8 FUSE Integration
+
+```elixir
+# Virtual directories for spatial access
+/mnt/mosaic/
+├── by-path/
+├── by-tag/
+├── by-region/              # GIS integration
+│   ├── new-york/
+│   │   ├── manhattan/
+│   │   └── brooklyn/
+│   ├── san-francisco/
+│   └── london/
+├── nearby/                 # Dynamic based on user location
+│   ├── 100m/
+│   ├── 1km/
+│   └── 10km/
+└── geo-search/
+    └── "restaurants within 5km"/
+```
+
+### 2.6.9 REST API
+
+```elixir
+# In Mosaic.API
+
+post "/api/geo/near" do
+  # Body: {"lat": 40.7128, "lon": -74.0060, "radius_m": 1000}
+  results = Mosaic.Geo.near(lat, lon, radius_m)
+  json(conn, %{results: results})
+end
+
+post "/api/geo/within" do
+  # Body: {"polygon": {"type": "Polygon", "coordinates": [...]}}
+  results = Mosaic.Geo.within(polygon)
+  json(conn, %{results: results})
+end
+
+post "/api/geo/search" do
+  # Body: {"query": "italian restaurants", "lat": 40.7, "lon": -74.0, "radius_m": 2000}
+  results = Mosaic.Geo.search_near(query, lat, lon, radius_m)
+  json(conn, %{results: results})
+end
+
+post "/api/geo/geofence/check" do
+  # Body: {"lat": 40.7, "lon": -74.0, "region_ids": ["office_nyc", "allowed_zone"]}
+  results = Mosaic.Geo.regions_containing(lat, lon)
+  json(conn, %{regions: results})
+end
+
+post "/api/geo/locations" do
+  # Body: {"node_id": "doc123", "geometry": {"type": "Point", "coordinates": [-74, 40.7]}}
+  {:ok, location} = Mosaic.Geo.add_location(node_id, geometry)
+  json(conn, location)
+end
+
+post "/api/geo/import" do
+  # Body: multipart with GeoJSON/Shapefile
+  {:ok, stats} = Mosaic.Geo.import_geojson(file)
+  json(conn, stats)
+end
+```
+
+---
+
+## Dependencies
+
+```elixir
+# mix.exs
+defp deps do
+  [
+    # SpatiaLite for SQLite
+    {:spatialite, "~> 0.1"},  # or load via Exqlite
+    
+    # GeoJSON parsing
+    {:geo, "~> 3.4"},
+    {:jason, "~> 1.4"},
+    
+    # Coordinate transformations
+    {:proj, "~> 0.1"},  # PROJ bindings if needed
+    
+    # Shapefile parsing
+    {:shpex, "~> 0.1"},  # or use external tool
+    
+    # Existing deps...
+  ]
+end
+```
+
+---
+
+## Updated Extension Matrix
+
+| Extension | Semantic | Structural | Spatial | RBAC | Status |
+|-----------|----------|------------|---------|------|--------|
+| **Core** | ✅ VSS | ✅ Graph | - | ✅ | Done |
+| **AST** | ✅ Symbol embeddings | ✅ Tree-sitter | - | ✅ | Planned |
+| **GIS** | ✅ + spatial | - | ✅ SpatiaLite | ✅ Geo-rules | Planned |
+| **Image** | ✅ CLIP | - | ✅ EXIF GPS | ✅ | Future |
+| **PDF** | ✅ Text | - | - | ✅ | Future |
+
+---
+
+## Power Query Examples
+
+```elixir
+# Find all Python functions that handle user data within 10km of HQ
+Mosaic.Query.execute("""
+  lang:python 
+  type:function 
+  semantic:"user data handling" 
+  near:37.7749,-122.4194,10000
+""")
+
+# Find legal documents accessible from NYC office
+Mosaic.Query.execute("""
+  tag:legal 
+  region:nyc_office 
+  rbac:current_user
+""")
+
+# Code review: find all API endpoints that access location data
+Mosaic.Code.search_semantic("endpoints that read user location")
+|> Mosaic.Geo.filter_in_region("production_servers")
+```

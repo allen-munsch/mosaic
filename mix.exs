@@ -4,8 +4,8 @@ defmodule Mosaic.MixProject do
   def project do
     [
       app: :mosaic,
-      version: "0.1.0",
-      elixir: "~> 1.16",
+      version: "0.2.0",
+      elixir: "~> 1.19.3",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       releases: releases()
