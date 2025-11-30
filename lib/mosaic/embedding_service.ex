@@ -1,6 +1,8 @@
 defmodule Mosaic.EmbeddingService do
   use GenServer
   require Logger
+  @timeout 5_000
+  @zero_embedding List.duplicate(0.0, 384)
 
   defmodule State do
     defstruct [:model_type, :model_ref]
@@ -32,20 +34,47 @@ defmodule Mosaic.EmbeddingService do
   def encode(text) when is_binary(text) do
     case Mosaic.EmbeddingCache.get(text) do
       {:ok, embedding} -> embedding
-      :miss ->
-        embedding = GenServer.call(__MODULE__, {:encode, text}, 30_000)
-        Mosaic.EmbeddingCache.put(text, embedding)
-        embedding
+      :miss -> generate_with_fallback(text)
     end
   end
 
   def encode_batch(texts) when is_list(texts) do
-    GenServer.call(__MODULE__, {:encode_batch, texts}, 60_000)
+    task = Task.async(fn ->
+      Nx.Serving.batched_run(MosaicEmbedding, texts)
+      |> Enum.map(fn %{embedding: t} -> Nx.to_list(t) end)
+    end)
+    case Task.yield(task, @timeout) || Task.shutdown(task) do
+      {:ok, embeddings} -> embeddings
+      nil ->
+        Logger.warning("Batch embedding timeout, returning zeros")
+        Enum.map(texts, fn _ -> @zero_embedding end)
+    end
+  end
+
+  defp generate_with_fallback(text) do
+    task = Task.async(fn ->
+      %{embedding: tensor} = Nx.Serving.batched_run(MosaicEmbedding, text)
+      Nx.to_list(tensor)
+    end)
+    case Task.yield(task, @timeout) || Task.shutdown(task) do
+      {:ok, embedding} ->
+        Mosaic.EmbeddingCache.put(text, embedding)
+        embedding
+      nil ->
+        Logger.warning("Embedding timeout for: #{String.slice(text, 0, 50)}...")
+        @zero_embedding
+    end
   end
 
   def handle_call({:encode, text}, _from, state) do
-    [embedding] = generate_embeddings([text], state.model_type, state.model_ref)
-    {:reply, embedding, state}
+    try do
+      [embedding] = generate_embeddings([text], state.model_type, state.model_ref)
+      {:reply, embedding, state}
+    catch
+      :error, _ ->
+        Logger.error("Embedding failed, returning zero vector")
+        {:reply, List.duplicate(0.0, 384), state}
+    end
   end
 
   def handle_call({:encode_batch, texts}, _from, state) do

@@ -67,13 +67,13 @@ defmodule Mosaic.DuckDBBridge do
       :exit, _ -> []
     end
   end
-
   defp attach_shards(conn, shards) do
     Enum.with_index(shards)
     |> Enum.each(fn {shard, idx} ->
       alias_name = "shard_#{idx}"
       Duckdbex.query(conn, "DETACH DATABASE IF EXISTS #{alias_name};")
-      Duckdbex.query(conn, "ATTACH '#{shard.path}' AS #{alias_name} (TYPE sqlite, READ_ONLY);")
+      # Add SQLITE_ALL_VARCHAR to avoid schema introspection issues
+      Duckdbex.query(conn, "ATTACH '#{shard.path}' AS #{alias_name} (TYPE sqlite, READ_ONLY, SQLITE_ALL_VARCHAR);")
     end)
   end
 
@@ -103,11 +103,12 @@ defmodule Mosaic.DuckDBBridge do
 
   defp rewrite_to_federated(sql, shards) do
     if Regex.match?(~r/FROM\s+documents\b/i, sql) do
-      shard_queries = Enum.with_index(shards)
-      |> Enum.map(fn {_, idx} ->
+      shard_queries = shards
+      |> Enum.map(fn shard ->
+        # Use sqlite_scan() to bypass schema introspection
         sql
-        |> String.replace(~r/FROM\s+documents\b/i, "FROM shard_#{idx}.documents")
-        |> String.replace(~r/ORDER\s+BY\s+[^;]+?(LIMIT|$)/i, "")
+        |> String.replace(~r/FROM\s+documents\b/i, "FROM sqlite_scan('#{shard.path}', 'documents')")
+        |> String.replace(~r/ORDER\s+BY\s+[^;]+?(LIMIT|$)/i, "\\1")
         |> String.replace(~r/LIMIT\s+\d+/i, "")
         |> String.trim()
       end)

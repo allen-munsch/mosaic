@@ -5,6 +5,25 @@ defmodule Mosaic.StorageManager do
   def start_link(_opts), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
   def init(nil), do: {:ok, %{}}
 
+  defp init_shard_schema(conn) do
+    # Regular table for DuckDB analytics
+    Exqlite.Basic.exec(conn, """
+      CREATE TABLE IF NOT EXISTS documents (
+        id TEXT PRIMARY KEY,
+        text TEXT,
+        metadata TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    """)
+
+    # Virtual table for vector search
+    Exqlite.Basic.exec(conn, """
+      CREATE VIRTUAL TABLE IF NOT EXISTS vec_documents USING vec0(
+        id TEXT PRIMARY KEY,
+        embedding FLOAT[384]
+      )
+    """)
+  end
   def create_shard(path), do: GenServer.call(__MODULE__, {:create_shard, path})
   def open_shard(path), do: GenServer.call(__MODULE__, {:open_shard, path})
   def get_shard_doc_count(path), do: GenServer.call(__MODULE__, {:get_shard_doc_count, path})

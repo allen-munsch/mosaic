@@ -118,6 +118,11 @@ defmodule Mosaic.API do
     json_ok(conn, %{status: "refreshed"})
   end
 
+  post "/api/admin/clear-cache" do
+    Mosaic.EmbeddingCache.reset_state()
+    json_ok(conn, %{status: "cleared"})
+  end
+
   get "/api/metrics" do
     metrics = %{
       cache_hits: Mosaic.EmbeddingCache.get_metrics().hits,

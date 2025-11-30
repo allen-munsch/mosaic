@@ -3,7 +3,7 @@ defmodule Mosaic.Indexer do
   require Logger
 
   @max_docs_per_shard 10_000
-  @max_concurrent 4  # Limit concurrent embedding calls
+  @max_concurrent 8  # Limit concurrent embedding calls
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 

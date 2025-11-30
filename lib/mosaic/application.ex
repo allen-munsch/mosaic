@@ -33,7 +33,11 @@ defmodule Mosaic.Application do
       {Mosaic.RoutingMaintenance, []},
 
       # Embeddings
-      {Mosaic.EmbeddingService, []},
+      {Nx.Serving,
+        serving: create_embedding_serving(),
+        name: MosaicEmbedding,
+        batch_size: 16,
+        batch_timeout: 100},
       {Mosaic.EmbeddingCache, []},
 
       # Indexer (manages active shard for document ingestion)
@@ -66,6 +70,15 @@ defmodule Mosaic.Application do
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Mosaic.Supervisor)
+  end
+
+  defp create_embedding_serving do
+    {:ok, model_info} = Bumblebee.load_model({:hf, "sentence-transformers/all-MiniLM-L6-v2"})
+    {:ok, tokenizer} = Bumblebee.load_tokenizer({:hf, "sentence-transformers/all-MiniLM-L6-v2"})
+    Bumblebee.Text.text_embedding(model_info, tokenizer,
+      compile: [batch_size: 16, sequence_length: 256],
+      defn_options: [compiler: EXLA]
+    )
   end
 
   defp configure_nx_backend do

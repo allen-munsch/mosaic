@@ -13,9 +13,9 @@ defmodule Mosaic.HealthCheck do
 
   def handle_info(:check_health, state) do
     health_status = perform_health_check()
-    
+
     Logger.info("Heartbeat: health check completed, status: #{health_status.status}")
-    
+
     schedule_health_check()
     {:noreply, %{state | last_check: DateTime.utc_now(), status: health_status.status}}
   end
@@ -31,9 +31,9 @@ defmodule Mosaic.HealthCheck do
       check_storage(),
       check_memory()
     ]
-    
+
     failed = Enum.filter(checks, fn {_name, status} -> status != :ok end)
-    
+
     %{
       timestamp: DateTime.utc_now(),
       status: if(length(failed) == 0, do: :healthy, else: :degraded),
@@ -55,8 +55,11 @@ defmodule Mosaic.HealthCheck do
 
   defp check_embedding_service do
     try do
-      Mosaic.EmbeddingService.encode("health check")
-      {:embeddings, :ok}
+      task = Task.async(fn -> Nx.Serving.batched_run(MosaicEmbedding, "test") end)
+      case Task.yield(task, 2000) || Task.shutdown(task) do
+        {:ok, _} -> {:embeddings, :ok}
+        nil -> {:embeddings, :timeout}
+      end
     rescue
       _ -> {:embeddings, :failed}
     end
@@ -64,7 +67,7 @@ defmodule Mosaic.HealthCheck do
 
   defp check_storage do
     storage_path = Mosaic.Config.get(:storage_path)
-    
+
     case File.stat(storage_path) do
       {:ok, %{access: access}} when access in [:read, :read_write] ->
         {:storage, :ok}
@@ -76,7 +79,7 @@ defmodule Mosaic.HealthCheck do
   defp check_memory do
     memory = :erlang.memory()
     total_mb = memory[:total] / 1_024 / 1_024
-    
+
     if total_mb < 8_000 do  # Less than 8GB
       {:memory, :ok}
     else
