@@ -23,8 +23,11 @@ defmodule Mosaic.ShardRouter do
 
     initialize_routing_schema(conn)
 
-    cache_table = :ets.new(:shard_cache, [:set, :private])
-    access_table = :ets.new(:shard_access, [:ordered_set, :private])
+    # Make ETS tables public and named for access by worker pool
+    :ets.new(:shard_cache, [:set, :public, :named_table])
+    :ets.new(:shard_access, [:ordered_set, :public, :named_table])
+    cache_table = :shard_cache
+    access_table = :shard_access
 
     bloom_filters = load_bloom_filters(conn)
     counter = preload_hot_shards(conn, max_size, cache_table, access_table, 0)
@@ -53,38 +56,44 @@ defmodule Mosaic.ShardRouter do
   def find_similar_shards(query_vector, limit, opts \\ []), do: GenServer.call(__MODULE__, {:find_similar, query_vector, limit, opts}, 30_000)
   def reset_state(), do: GenServer.call(__MODULE__, :reset_state)
   def get_cache_state(), do: GenServer.call(__MODULE__, :get_cache_state)
+  def update_centroid(shard_id, centroid), do: GenServer.cast(__MODULE__, {:update_centroid, shard_id, centroid})
+  def register_shard(shard_info), do: GenServer.cast(__MODULE__, {:register_shard, shard_info})
+
+  def list_all_shards do
+    GenServer.call(__MODULE__, :list_all_shards)
+  end
 
   def handle_call({:find_similar, query_vector, limit, opts}, _from, state) do
-    min_similarity = Keyword.get(opts, :min_similarity, Mosaic.Config.get(:min_similarity))
-    vector_math_impl = Keyword.get(opts, :vector_math_impl, VectorMath)
-
-    filtered_shards = case Keyword.get(opts, :keywords) do
-      nil -> nil
-      keywords -> filter_by_bloom(keywords, state.bloom_filters)
-    end
-
-    {shards, new_state} = find_similar_cached(query_vector, limit, min_similarity, filtered_shards, vector_math_impl, state)
+    {shards, cache_hit} = Mosaic.WorkerPool.transaction(:router_pool, fn worker ->
+      GenServer.call(worker, {:find_similar, query_vector, limit, opts, state})
+    end)
+    new_state = if cache_hit, do: %{state | cache_hits: state.cache_hits + 1}, else: %{state | cache_misses: state.cache_misses + 1}
     final_state = update_access_stats(shards, new_state)
     {:reply, {:ok, shards}, final_state}
   end
 
   def handle_call(:reset_state, _from, state) do
-    :ets.delete(state.cache_table)
-    :ets.delete(state.access_table)
+    # Explicitly delete ETS tables by name
+    :ets.delete(:shard_cache)
+    :ets.delete(:shard_access)
     Exqlite.Sqlite3.close(state.routing_conn)
 
     routing_db_path = Mosaic.Config.get(:routing_db_path)
-    max_size = Mosaic.Config.get(:routing_cache_max_size)  # <-- Add this line
+    max_size = Mosaic.Config.get(:routing_cache_max_size)
 
     {:ok, conn} = Exqlite.Sqlite3.open(routing_db_path)
     initialize_routing_schema(conn)
 
-    cache_table = :ets.new(:shard_cache, [:set, :private])
-    access_table = :ets.new(:shard_access, [:ordered_set, :private])
-    bloom_filters = load_bloom_filters(conn)
-    counter = preload_hot_shards(conn, max_size, cache_table, access_table, 0)  # <-- Use max_size
+    # Make ETS tables public and named for access by worker pool
+    :ets.new(:shard_cache, [:set, :public, :named_table])
+    :ets.new(:shard_access, [:ordered_set, :public, :named_table])
+    cache_table = :shard_cache
+    access_table = :shard_access
 
-    new_state = %State{routing_conn: conn, cache_table: cache_table, access_table: access_table, access_counts: %{}, bloom_filters: bloom_filters, counter: counter, max_size: max_size, cache_hits: 0, cache_misses: 0}  # <-- Use max_size
+    bloom_filters = load_bloom_filters(conn)
+    counter = preload_hot_shards(conn, max_size, cache_table, access_table, 0)
+
+    new_state = %State{routing_conn: conn, cache_table: cache_table, access_table: access_table, access_counts: %{}, bloom_filters: bloom_filters, counter: counter, max_size: max_size, cache_hits: 0, cache_misses: 0}
     {:reply, :ok, new_state}
   end
 
@@ -99,18 +108,69 @@ defmodule Mosaic.ShardRouter do
     {:reply, %{cache_keys: cache_keys, access_list: access_list}, state}
   end
 
-  defp find_similar_cached(query_vector, limit, min_similarity, filter_ids, vector_math_impl, state) do
+  def handle_cast({:update_centroid, shard_id, centroid}, state) do
+    centroid_norm = VectorMath.norm(centroid)
+    centroid_blob = :erlang.term_to_binary(centroid)
+
+    Mosaic.DB.execute(state.routing_conn, "INSERT OR REPLACE INTO shard_centroids (shard_id, centroid, centroid_norm) VALUES (?, ?, ?)", [shard_id, centroid_blob, centroid_norm])
+
+    # Update the cached shard if it exists
+    case :ets.lookup(state.cache_table, shard_id) do
+      [{^shard_id, cached_shard}] ->
+        updated_shard = %{cached_shard | centroid: centroid_blob, centroid_norm: centroid_norm}
+        :ets.insert(state.cache_table, {shard_id, updated_shard})
+      [] -> :ok
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_cast({:register_shard, shard_info}, state) do
+    %{id: id, path: path, centroid: centroid, doc_count: doc_count, bloom_filter: bloom} = shard_info
+    centroid_norm = VectorMath.norm(centroid)
+    centroid_blob = :erlang.term_to_binary(centroid)
+    bloom_blob = BloomFilter.to_binary(bloom)
+
+    Mosaic.DB.execute(state.routing_conn, "INSERT OR REPLACE INTO shard_metadata (id, path, doc_count, bloom_filter, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)", [id, path, doc_count, bloom_blob])
+    Mosaic.DB.execute(state.routing_conn, "INSERT OR REPLACE INTO shard_centroids (shard_id, centroid, centroid_norm) VALUES (?, ?, ?)", [id, centroid_blob, centroid_norm])
+
+    cached_shard = %{id: id, path: path, doc_count: doc_count, query_count: 0, centroid: centroid_blob, centroid_norm: centroid_norm}
+    :ets.insert(state.cache_table, {id, cached_shard})
+    :ets.insert(state.access_table, {{state.counter, id}, true})
+    new_blooms = Map.put(state.bloom_filters, id, bloom)
+
+    {:noreply, %{state | bloom_filters: new_blooms, counter: state.counter + 1}}
+  end
+
+  # Public function to be called by ShardRouter.Worker
+  # Returns {shards, cache_hit_boolean}
+  def do_find_similar(query_vector, limit, opts, current_state) do
+    min_similarity = Keyword.get(opts, :min_similarity, Mosaic.Config.get(:min_similarity))
+    vector_math_impl = Keyword.get(opts, :vector_math_impl, VectorMath)
+
+    filtered_shards = case Keyword.get(opts, :keywords) do
+      nil -> nil
+      keywords -> filter_by_bloom(keywords, current_state.bloom_filters)
+    end
+
+    p_do_find_similar(query_vector, limit, min_similarity, filtered_shards, vector_math_impl, current_state)
+  end
+
+  defp p_do_find_similar(query_vector, limit, min_similarity, filter_ids, vector_math_impl, state) do
     query_norm = vector_math_impl.norm(query_vector)
 
     candidates = if filter_ids do
-      filter_ids |> Enum.filter_map(&:ets.member(state.cache_table, &1), fn id ->
-        case :ets.lookup(state.cache_table, id) do
+      filter_ids
+      |> Enum.filter(&(:ets.member(state.cache_table, &1))) # Use table name here
+      |> Enum.map(fn id ->
+        case :ets.lookup(state.cache_table, id) do # Use table name here
           [{^id, shard}] -> shard
           [] -> nil
         end
-      end) |> Enum.reject(&is_nil/1)
+      end)
+      |> Enum.reject(&is_nil/1)
     else
-      :ets.tab2list(state.cache_table) |> Enum.map(fn {_id, shard} -> shard end)
+      :ets.tab2list(state.cache_table) |> Enum.map(fn {_id, shard} -> shard end) # Use table name here
     end
 
     cached_shards = candidates |> Enum.map(fn shard ->
@@ -121,15 +181,15 @@ defmodule Mosaic.ShardRouter do
 
     if length(cached_shards) >= limit do
       result = Enum.sort_by(cached_shards, & &1.similarity, :desc) |> Enum.take(limit)
-      {result, %{state | cache_hits: state.cache_hits + length(result)}}
+      {result, true} # Return shards and cache_hit = true
     else
-      db_shards = find_similar_db(query_vector, limit, min_similarity, filter_ids, vector_math_impl, state)
-      new_counter = Enum.reduce(db_shards, state.counter, fn shard, cnt -> add_to_cache(shard, cnt, state) end)
-      {db_shards, %{state | counter: new_counter, cache_misses: state.cache_misses + 1}}
+      db_shards = p_find_similar_db(query_vector, limit, min_similarity, filter_ids, vector_math_impl, state)
+      _new_counter = Enum.reduce(db_shards, state.counter, fn shard, cnt -> add_to_cache(shard, cnt, state) end)
+      {db_shards, false} # Return shards and cache_hit = false
     end
   end
 
-  defp find_similar_db(query_vector, limit, min_similarity, filter_ids, vector_math_impl, state) do
+  defp p_find_similar_db(query_vector, limit, min_similarity, filter_ids, vector_math_impl, state) do
     query_norm = vector_math_impl.norm(query_vector)
     where_clause = if filter_ids, do: "AND sm.id IN (#{Enum.map_join(filter_ids, ",", &"'#{&1}'")})", else: ""
 
@@ -229,22 +289,5 @@ defmodule Mosaic.ShardRouter do
       Exqlite.Sqlite3.bind(statement, [count, shard_id])
       Exqlite.Sqlite3.step(state.routing_conn, statement)
     end)
-  end
-
-  def handle_cast({:register_shard, shard_info}, state) do
-    %{id: id, path: path, centroid: centroid, doc_count: doc_count, bloom_filter: bloom} = shard_info
-    centroid_norm = VectorMath.norm(centroid)
-    centroid_blob = :erlang.term_to_binary(centroid)
-    bloom_blob = BloomFilter.to_binary(bloom)
-
-    Mosaic.DB.execute(state.routing_conn, "INSERT OR REPLACE INTO shard_metadata (id, path, doc_count, bloom_filter, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)", [id, path, doc_count, bloom_blob])
-    Mosaic.DB.execute(state.routing_conn, "INSERT OR REPLACE INTO shard_centroids (shard_id, centroid, centroid_norm) VALUES (?, ?, ?)", [id, centroid_blob, centroid_norm])
-
-    cached_shard = %{id: id, path: path, doc_count: doc_count, query_count: 0, centroid: centroid_blob, centroid_norm: centroid_norm}
-    :ets.insert(state.cache_table, {id, cached_shard})
-    :ets.insert(state.access_table, {{state.counter, id}, true})
-    new_blooms = Map.put(state.bloom_filters, id, bloom)
-
-    {:noreply, %{state | bloom_filters: new_blooms, counter: state.counter + 1}}
   end
 end

@@ -3,71 +3,62 @@ defmodule Mosaic.Application do
   require Logger
 
   @moduledoc """
-  Enhanced Fractal SQLite Vector Semantic Fabric
+  MosaicDB: Federated Semantic Search + Analytics
 
-  Key improvements:
-  - Hierarchical shard routing with bloom filters
-  - Adaptive batch sizing for embeddings
-  - Connection pooling for SQLite operations
-  - Smart caching with LRU eviction
-  - Health monitoring and auto-recovery
+  HOT PATH:  SQLite + sqlite-vec (search, < 50ms)
+  WARM PATH: DuckDB (analytics, < 500ms)
   """
 
   def start(_type, _args) do
-    Logger.info("Starting Mosaic: Enhanced Fractal SQLite Vector Semantic Fabric")
-
-    # Manually start the config server first, as other child specs depend on it.
+    Logger.info("Starting MosaicDB")
     {:ok, _} = Mosaic.Config.start_link()
+    configure_nx_backend()
 
-    # The supervision tree dynamically starts the right cache backend
-    # and injects it into the QueryEngine.
-    children = children()
-
-    opts = [strategy: :one_for_one, name: Mosaic.Supervisor]
-    Logger.info("Starting supervisor with #{length(children)} children...")
-    Supervisor.start_link(children, opts)
-  end
-
-  defp children do
-    # Determine which cache implementation to use based on config.
-    cache_impl = cache_module()
-    ranker_opts = ranker_config()
-
-    [
-      # Core coordination
+    children = [
+      # Cluster coordination
       {Cluster.Supervisor, [topologies(), [name: Mosaic.ClusterSupervisor]]},
 
-      # Storage layer and configuration. Config is started manually above.
+      # Storage layer
       {Mosaic.StorageManager, []},
       {Mosaic.ConnectionPool, []},
 
-      # Start the selected cache implementation
-      cache_child_spec(cache_impl),
+      Mosaic.WorkerPool.child_spec(name: :router_pool, worker: Mosaic.ShardRouter.Worker, size: 10),
 
-      # Routing and indexing
+      # Cache (ETS or Redis based on config)
+      cache_child_spec(),
+
+      # Shard routing
       {Mosaic.ShardRouter, []},
       {Mosaic.BloomFilterManager, []},
       {Mosaic.RoutingMaintenance, []},
 
-      # Embedding services
-      {Mosaic.EmbeddingService, []},
+      # Embeddings
+      {Nx.Serving,
+        serving: create_embedding_serving(),
+        name: MosaicEmbedding,
+        batch_size: 16,
+        batch_timeout: 100},
       {Mosaic.EmbeddingCache, []},
 
-      # Query execution with the cache and ranker implementations injected
-      {Mosaic.QueryEngine,
-       [
-         cache: cache_impl,
-         cache_ttl: Mosaic.Config.get(:query_cache_ttl_seconds),
-         ranker: Mosaic.Ranking.Ranker.new(ranker_opts)
-       ]},
-      {Mosaic.CircuitBreaker, []},
+      # Indexer (manages active shard for document ingestion)
+      {Mosaic.Indexer, []},
 
-      # Crawling pipeline
+      # HOT PATH: Query engine (SQLite + sqlite-vec)
+      {Mosaic.QueryEngine, [
+        cache: cache_module(),
+        cache_ttl: Mosaic.Config.get(:query_cache_ttl_seconds),
+        ranker: Mosaic.Ranking.Ranker.new(ranker_config())
+      ]},
+
+      # WARM PATH: Analytics engine (DuckDB)
+      {Mosaic.DuckDBBridge, []},
+
+      # Crawling (optional)
       {Mosaic.CrawlerSupervisor, []},
       {Mosaic.URLFrontier, []},
       {Mosaic.CrawlerPipeline, []},
 
-      # PageRank computation
+      # Background jobs
       {Mosaic.PageRankComputer, []},
 
       # Monitoring
@@ -75,25 +66,49 @@ defmodule Mosaic.Application do
       {Mosaic.HealthCheck, []},
 
       # API
-      {Plug.Cowboy, scheme: :http, plug: Mosaic.API, options: [port: get_port()]}
+      {Plug.Cowboy, scheme: :http, plug: Mosaic.API, options: [port: port()]}
     ]
+
+    Supervisor.start_link(children, strategy: :one_for_one, name: Mosaic.Supervisor)
+  end
+
+  defp create_embedding_serving do
+    {:ok, model_info} = Bumblebee.load_model({:hf, "sentence-transformers/all-MiniLM-L6-v2"})
+    {:ok, tokenizer} = Bumblebee.load_tokenizer({:hf, "sentence-transformers/all-MiniLM-L6-v2"})
+    Bumblebee.Text.text_embedding(model_info, tokenizer,
+      compile: [batch_size: 16, sequence_length: 256],
+      defn_options: [compiler: EXLA]
+    )
+  end
+
+  defp configure_nx_backend do
+    case Mosaic.Config.get(:nx_backend) do
+      "exla" ->
+        client = case Mosaic.Config.get(:nx_client) do
+          "cuda" -> :cuda
+          "host" -> :host
+          _ -> :host
+        end
+        Nx.default_backend({EXLA.Backend, client: client})
+      "binary" ->
+        Nx.default_backend(Nx.BinaryBackend)
+      _ ->
+        Nx.default_backend(EXLA.Backend)
+    end
   end
 
   defp cache_module do
     case Mosaic.Config.get(:cache_backend) do
       "redis" -> Mosaic.Cache.Redis
-      "ets" -> Mosaic.Cache.ETS
-      _ -> Mosaic.Cache.ETS # Default to ETS
+      _ -> Mosaic.Cache.ETS
     end
   end
 
-  # Returns the appropriate child spec for the chosen cache implementation.
-  defp cache_child_spec(Mosaic.Cache.Redis) do
-    {Mosaic.Cache.Redis, [url: Mosaic.Config.get(:redis_url)]}
-  end
-
-  defp cache_child_spec(Mosaic.Cache.ETS) do
-    {Mosaic.Cache.ETS, [name: Mosaic.Cache.ETS]}
+  defp cache_child_spec do
+    case cache_module() do
+      Mosaic.Cache.Redis -> {Mosaic.Cache.Redis, [url: Mosaic.Config.get(:redis_url)]}
+      Mosaic.Cache.ETS -> {Mosaic.Cache.ETS, [name: Mosaic.Cache.ETS]}
+    end
   end
 
   defp ranker_config do
@@ -110,21 +125,16 @@ defmodule Mosaic.Application do
   end
 
   defp topologies do
-    [
-      semantic_fabric: [
-        strategy: Cluster.Strategy.Gossip,
-        config: [
-          port: 45892,
-          if_addr: "0.0.0.0",
-          multicast_addr: "230.1.1.251",
-          multicast_ttl: 1,
-          secret: System.get_env("CLUSTER_SECRET", "semantic-fabric-secret")
-        ]
+    [[semantic_fabric: [
+      strategy: Cluster.Strategy.Gossip,
+      config: [
+        port: 45892,
+        if_addr: "0.0.0.0",
+        multicast_addr: "230.1.1.251",
+        secret: System.get_env("CLUSTER_SECRET", "mosaic-secret")
       ]
-    ]
+    ]]]
   end
 
-  defp get_port do
-    System.get_env("PORT", "4040") |> String.to_integer()
-  end
+  defp port, do: System.get_env("PORT", "4040") |> String.to_integer()
 end

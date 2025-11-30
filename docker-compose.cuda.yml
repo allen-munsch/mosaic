@@ -3,7 +3,9 @@ services:
   # Mosaic Coordinator Node (Placeholder - runs minimal HTTP server)
   # ============================================================================
   mosaic:
-    build: .
+    build:
+      context: .
+      dockerfile: ./Dockerfile.cuda
     container_name: mosaic
     hostname: mosaic
     working_dir: /app
@@ -11,10 +13,16 @@ services:
       - PORT=4040
       - SQLITE_VEC_PATH=/app/deps/sqlite_vec/priv/0.1.5/vec0.so # Adjust path as necessary
       - CLUSTER_SECRET=mosaic-secret # Use environment variable for consistency
+      - XLA_TARGET=cuda12
+      - EMBEDDING_BATCH_SIZE=16
+      - XLA_GPU_MEM_ALLOCATION=0.8
+      - NX_CLIENT=cuda
     ports:
       - "4040:4040"
     volumes:
       - .:/app
+      - /app/_build # Anonymous volume preserves container's build
+      - /app/deps   # Anonymous volume preserves container's deps
       - mosaic-data:/data # Data volume for SQLite shards
     networks:
       - mosaic
@@ -26,6 +34,11 @@ services:
       retries: 5
       start_period: 20s
     restart: unless-stopped
+    runtime: nvidia
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
 
   # ============================================================================
   # Redis (Distributed caching)

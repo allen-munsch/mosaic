@@ -1,37 +1,34 @@
-FROM elixir:1.16-alpine
+# Use the specified Elixir image as base
+FROM elixir:1.19.3-otp-28-slim
 
-# Install runtime dependencies
-RUN apk add --no-cache \
-    build-base \
+# Install necessary system dependencies
+# build-essential for compilation tools, git for mix deps that might be from git,
+# sqlite3 for the SQLite client (useful for debugging inside the container)
+RUN apt-get update && apt-get install -y \
+    build-essential \
     git \
-    sqlite \
+    sqlite3 \
     curl \
-    bash
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    && rm -rf /var/lib/apt/lists/*
+ENV PATH="/root/.cargo/bin:$PATH"
 
-# Install hex and rebar
-RUN mix local.hex --force && \
-    mix local.rebar --force
-
-# Set working directory
+# Set the working directory inside the container
 WORKDIR /app
 
-# Copy mix files
-COPY mix.exs mix.lock ./
+# Copy the application code
+COPY . /app
 
-# Install dependencies
-ENV MIX_ENV=dev
-RUN mix deps.get
+# Install Elixir dependencies and compile the project
+# Use --force to ensure recompilation if needed
+# mix ecto.create and mix ecto.migrate are placeholders if you have Ecto setup
+RUN mix deps.get --only prod && \
+    mix deps.compile sqlite_vec && \
+    mix deps.compile duckdbex && \
+    mix compile
 
-# Copy application code
-COPY config ./config
-COPY lib ./lib
-COPY priv ./priv
-
-# Compile
-RUN mix compile
-
-# Expose port
+# Expose the port your application runs on
 EXPOSE 4040
 
-# Run with mix (no release needed)
+# Define the command to run your application
 CMD ["mix", "run", "--no-halt"]

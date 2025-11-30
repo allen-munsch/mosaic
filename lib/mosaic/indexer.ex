@@ -1,15 +1,37 @@
 defmodule Mosaic.Indexer do
-  @moduledoc """
-  Handles document indexing: creates shards, generates embeddings, stores vectors, registers with router.
-  """
+  use GenServer
   require Logger
 
-  @docs_per_shard 10_000
+  @max_docs_per_shard 10_000
+  @max_concurrent 8  # Limit concurrent embedding calls
+
+  def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+
+  def init(_opts) do
+    :ets.new(:indexer_state, [:set, :public, :named_table])
+    :ets.insert(:indexer_state, {:active_shard, nil, nil, 0})
+    {:ok, %{semaphore: @max_concurrent}}
+  end
+
+  def index_document(id, text, metadata \\ %{}) do
+    case GenServer.call(__MODULE__, :acquire, 5000) do
+      :ok ->
+        Task.start(fn ->
+          try do
+            do_index_document(id, text, metadata)
+          after
+            GenServer.cast(__MODULE__, :release)
+          end
+        end)
+        {:ok, %{id: id, status: :queued}}
+      :full ->
+        {:error, :queue_full}
+    end
+  end
 
   def index_documents(documents, opts \\ []) do
     shard_id = Keyword.get(opts, :shard_id, generate_shard_id())
-    shard_path = Keyword.get(opts, :shard_path, shard_path_for(shard_id))
-
+    shard_path = shard_path_for(shard_id)
     with {:ok, ^shard_path} <- Mosaic.StorageManager.create_shard(shard_path),
          {:ok, conn} <- Mosaic.ConnectionPool.checkout(shard_path),
          :ok <- insert_documents(conn, documents),
@@ -20,50 +42,61 @@ defmodule Mosaic.Indexer do
     end
   end
 
-  def index_document(id, text, metadata \\ %{}) do
-    # Find or create active shard
-    {shard_id, shard_path, conn} = get_or_create_active_shard()
+  def handle_call(:acquire, _from, %{semaphore: 0} = state) do
+    {:reply, :full, state}
+  end
+  def handle_call(:acquire, _from, %{semaphore: n} = state) do
+    {:reply, :ok, %{state | semaphore: n - 1}}
+  end
 
+  def handle_cast(:release, %{semaphore: n} = state) do
+    {:noreply, %{state | semaphore: min(n + 1, @max_concurrent)}}
+  end
+
+  defp do_index_document(id, text, metadata) do
+    {_shard_id, shard_path, conn} = get_or_create_shard()
     embedding = Mosaic.EmbeddingService.encode(text)
-    embedding_json = Jason.encode!(embedding)
-
-    :ok = Mosaic.DB.execute(conn, "INSERT INTO documents (id, text, metadata) VALUES (?, ?, ?)", [id, text, Jason.encode!(metadata)])
-
-    # Get rowid of inserted doc
-    {:ok, stmt} = Exqlite.Sqlite3.prepare(conn, "SELECT rowid FROM documents WHERE id = ?")
-    :ok = Exqlite.Sqlite3.bind(stmt, [id])
-    {:row, [rowid]} = Exqlite.Sqlite3.step(conn, stmt)
-    Exqlite.Sqlite3.release(conn, stmt)
-
-    # Insert into vss_vectors with JSON format
-    {:ok, vss_stmt} = Exqlite.Sqlite3.prepare(conn, "INSERT INTO vss_vectors(rowid, vec) VALUES (?, ?)")
-    :ok = Exqlite.Sqlite3.bind(vss_stmt, [rowid, embedding_json])
-    :done = Exqlite.Sqlite3.step(conn, vss_stmt)
-    Exqlite.Sqlite3.release(conn, vss_stmt)
-
+    :ok = Mosaic.DB.execute(conn, "INSERT INTO documents (id, text, metadata, embedding) VALUES (?, ?, ?, ?)", [id, text, Jason.encode!(metadata), Jason.encode!(embedding)])
+    :ok = Mosaic.DB.execute(conn, "INSERT INTO vec_documents (id, embedding) VALUES (?, ?)", [id, Jason.encode!(embedding)])
     Mosaic.ConnectionPool.checkin(shard_path, conn)
-    {:ok, %{id: id, shard_id: shard_id}}
+    increment_doc_count()
+    Logger.debug("Indexed document #{id}")
+  rescue
+    e -> Logger.error("Failed to index #{id}: #{inspect(e)}")
+  end
+
+  defp get_or_create_shard do
+    case :ets.lookup(:indexer_state, :active_shard) do
+      [{:active_shard, nil, nil, _}] -> create_new_shard()
+      [{:active_shard, _id, _path, count}] when count >= @max_docs_per_shard -> create_new_shard()
+      [{:active_shard, shard_id, shard_path, _count}] ->
+        {:ok, conn} = Mosaic.ConnectionPool.checkout(shard_path)
+        {shard_id, shard_path, conn}
+    end
+  end
+
+  defp create_new_shard do
+    shard_id = generate_shard_id()
+    shard_path = shard_path_for(shard_id)
+    {:ok, ^shard_path} = Mosaic.StorageManager.create_shard(shard_path)
+    {:ok, conn} = Mosaic.ConnectionPool.checkout(shard_path)
+    :ets.insert(:indexer_state, {:active_shard, shard_id, shard_path, 0})
+    {shard_id, shard_path, conn}
+  end
+
+  defp increment_doc_count do
+    case :ets.lookup(:indexer_state, :active_shard) do
+      [{:active_shard, id, path, count}] -> :ets.insert(:indexer_state, {:active_shard, id, path, count + 1})
+      _ -> :ok
+    end
   end
 
   defp insert_documents(conn, documents) do
     texts = Enum.map(documents, fn {_id, text, _meta} -> text end)
     embeddings = Mosaic.EmbeddingService.encode_batch(texts)
-
-    Enum.zip(documents, embeddings)
-    |> Enum.each(fn {{id, text, meta}, embedding} ->
-      :ok = Mosaic.DB.execute(conn, "INSERT INTO documents (id, text, metadata) VALUES (?, ?, ?)", [id, text, Jason.encode!(meta)])
-
-      {:ok, stmt} = Exqlite.Sqlite3.prepare(conn, "SELECT rowid FROM documents WHERE id = ?")
-      :ok = Exqlite.Sqlite3.bind(stmt, [id])
-      {:row, [rowid]} = Exqlite.Sqlite3.step(conn, stmt)
-      Exqlite.Sqlite3.release(conn, stmt)
-
-      # VSS requires JSON array format
-      embedding_json = Jason.encode!(embedding)
-      {:ok, vss_stmt} = Exqlite.Sqlite3.prepare(conn, "INSERT INTO vss_vectors(rowid, vec) VALUES (?, ?)")
-      :ok = Exqlite.Sqlite3.bind(vss_stmt, [rowid, embedding_json])
-      :done = Exqlite.Sqlite3.step(conn, vss_stmt)
-      Exqlite.Sqlite3.release(conn, vss_stmt)
+    Enum.zip(documents, embeddings) |> Enum.each(fn {{id, text, meta}, emb} ->
+      :ok = Mosaic.DB.execute(conn, "INSERT INTO documents (id, text, metadata, embedding) VALUES (?, ?, ?, ?)", [id, text, Jason.encode!(meta), Jason.encode!(emb)])
+      :ok = Mosaic.DB.execute(conn, "INSERT INTO vec_documents (id, embedding) VALUES (?, ?)", [id, Jason.encode!(emb)])
     end)
     :ok
   end
@@ -71,48 +104,15 @@ defmodule Mosaic.Indexer do
   defp register_shard(shard_id, shard_path, documents) do
     texts = Enum.map(documents, fn {_id, text, _meta} -> text end)
     embeddings = Mosaic.EmbeddingService.encode_batch(texts)
-
-    # Compute centroid (mean of all embeddings)
     dim = length(hd(embeddings))
-    centroid = embeddings
-    |> Enum.reduce(List.duplicate(0.0, dim), fn emb, acc ->
-      Enum.zip(emb, acc) |> Enum.map(fn {a, b} -> a + b end)
-    end)
-    |> Enum.map(&(&1 / length(embeddings)))
-
-    # Build bloom filter from document terms
-    terms = texts
-    |> Enum.flat_map(&String.split(&1, ~r/\W+/))
-    |> Enum.map(&String.downcase/1)
-    |> Enum.filter(&(String.length(&1) > 2))
+    centroid = embeddings |> Enum.reduce(List.duplicate(0.0, dim), fn emb, acc -> Enum.zip(emb, acc) |> Enum.map(fn {a, b} -> a + b end) end) |> Enum.map(&(&1 / length(embeddings)))
+    terms = texts |> Enum.flat_map(&String.split(&1, ~r/\W+/)) |> Enum.map(&String.downcase/1) |> Enum.filter(&(String.length(&1) > 2))
     bloom = Mosaic.BloomFilterManager.create_bloom_filter(terms)
-
-    GenServer.cast(Mosaic.ShardRouter, {:register_shard, %{
-      id: shard_id,
-      path: shard_path,
-      centroid: centroid,
-      doc_count: length(documents),
-      bloom_filter: bloom
-    }})
+    GenServer.cast(Mosaic.ShardRouter, {:register_shard, %{id: shard_id, path: shard_path, centroid: centroid, doc_count: length(documents), bloom_filter: bloom}})
+    Mosaic.QueryEngine.invalidate_cache(shard_id)
     :ok
   end
 
-  defp get_or_create_active_shard do
-    # Simple: always create new shard for now
-    # TODO: Track active shard and reuse until full
-    shard_id = generate_shard_id()
-    shard_path = shard_path_for(shard_id)
-    {:ok, ^shard_path} = Mosaic.StorageManager.create_shard(shard_path)
-    {:ok, conn} = Mosaic.ConnectionPool.checkout(shard_path)
-    {shard_id, shard_path, conn}
-  end
-
-  defp generate_shard_id do
-    "shard_#{:erlang.system_time(:millisecond)}_#{:rand.uniform(1000)}"
-  end
-
-  defp shard_path_for(shard_id) do
-    storage_path = Mosaic.Config.get(:storage_path)
-    Path.join(storage_path, "#{shard_id}.db")
-  end
+  defp generate_shard_id, do: "shard_#{:erlang.system_time(:millisecond)}_#{:rand.uniform(1000)}"
+  defp shard_path_for(shard_id), do: Path.join(Mosaic.Config.get(:storage_path), "#{shard_id}.db")
 end
