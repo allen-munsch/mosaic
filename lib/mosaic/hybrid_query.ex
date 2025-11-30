@@ -63,8 +63,8 @@ defmodule Mosaic.HybridQuery do
     Exqlite.Sqlite3.release(conn, stmt)
 
     Enum.map(rows, fn [id, text, metadata, created_at, pagerank, distance] ->
-      %{ 
-        id: id, 
+      %{
+        id: id,
         text: text,
         metadata: safe_decode(metadata),
         created_at: parse_datetime(created_at),
@@ -78,6 +78,9 @@ defmodule Mosaic.HybridQuery do
     case Exqlite.Sqlite3.step(conn, stmt) do
       {:row, row} -> fetch_all_rows(conn, stmt, [row | acc])
       :done -> Enum.reverse(acc)
+      {:error, reason} ->
+        Logger.warning("SQLite error: #{inspect(reason)}")
+        Enum.reverse(acc)
     end
   end
 

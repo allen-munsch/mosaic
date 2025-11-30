@@ -85,8 +85,10 @@ defmodule Mosaic.API do
     case conn.body_params do
       %{"text" => text, "id" => id} ->
         metadata = Map.get(conn.body_params, "metadata", %{})
-        {:ok, result} = Mosaic.Indexer.index_document(id, text, metadata)
-        json_ok(conn, 201, %{id: result.id, status: result.status})
+        case Mosaic.Indexer.index_document(id, text, metadata) do
+          {:ok, result} -> json_ok(conn, 201, %{id: result.id, status: result.status})
+          {:error, :queue_full} -> json_error(conn, 503, "Server busy, try again")
+        end
 
       %{"documents" => docs} when is_list(docs) ->
         documents = Enum.map(docs, fn d -> {d["id"], d["text"], Map.get(d, "metadata", %{})} end)
