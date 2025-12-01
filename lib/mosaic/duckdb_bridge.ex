@@ -87,12 +87,22 @@ defmodule Mosaic.DuckDBBridge do
   end
 
   defp execute_federated(sql, params, conn) do
-    shards = list_current_shards()
-    if Enum.empty?(shards) do
-      {:ok, []}
+    if Regex.match?(~r/FROM\s+documents\b/i, sql) do
+      shards = list_current_shards()
+      if Enum.empty?(shards) do
+        {:ok, []}
+      else
+        federated_sql = rewrite_to_federated(sql, shards)
+        case Duckdbex.query(conn, federated_sql, params) do
+          {:ok, result} ->
+            rows = Duckdbex.fetch_all(result)
+            {:ok, rows}
+          {:error, err} -> {:error, err}
+        end
+      end
     else
-      federated_sql = rewrite_to_federated(sql, shards)
-      case Duckdbex.query(conn, federated_sql, params) do
+      # If not a federated query, execute directly
+      case Duckdbex.query(conn, sql, params) do
         {:ok, result} ->
           rows = Duckdbex.fetch_all(result)
           {:ok, rows}

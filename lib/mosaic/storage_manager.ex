@@ -5,25 +5,7 @@ defmodule Mosaic.StorageManager do
   def start_link(_opts), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
   def init(nil), do: {:ok, %{}}
 
-  defp init_shard_schema(conn) do
-    # Regular table for DuckDB analytics
-    Exqlite.Basic.exec(conn, """
-      CREATE TABLE IF NOT EXISTS documents (
-        id TEXT PRIMARY KEY,
-        text TEXT,
-        metadata TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-      )
-    """)
 
-    # Virtual table for vector search
-    Exqlite.Basic.exec(conn, """
-      CREATE VIRTUAL TABLE IF NOT EXISTS vec_documents USING vec0(
-        id TEXT PRIMARY KEY,
-        embedding FLOAT[384]
-      )
-    """)
-  end
   def create_shard(path), do: GenServer.call(__MODULE__, {:create_shard, path})
   def open_shard(path), do: GenServer.call(__MODULE__, {:open_shard, path})
   def get_shard_doc_count(path), do: GenServer.call(__MODULE__, {:get_shard_doc_count, path})
@@ -123,24 +105,44 @@ defmodule Mosaic.StorageManager do
   end
 
   defp create_schema(conn) do
-    # Documents table with embedding stored inline
-    Exqlite.Sqlite3.execute(conn, """
-      CREATE TABLE IF NOT EXISTS documents (
-        id TEXT PRIMARY KEY,
-        text TEXT NOT NULL,
-        metadata JSON,
-        embedding BLOB,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        pagerank REAL DEFAULT 0.0
-      );
-    """)
-
-    Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_docs_created ON documents(created_at);")
-    Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_docs_pagerank ON documents(pagerank DESC);")
-
-    # Vector index using sqlite-vec
-    embedding_dim = Mosaic.Config.get(:embedding_dim)
-    Exqlite.Sqlite3.execute(conn, "CREATE VIRTUAL TABLE IF NOT EXISTS vec_documents USING vec0(id TEXT PRIMARY KEY, embedding float[#{embedding_dim}]);")
-  end
+  # Source documents (raw text only)
+  Exqlite.Sqlite3.execute(conn, """
+    CREATE TABLE IF NOT EXISTS documents (
+      id TEXT PRIMARY KEY,
+      text TEXT NOT NULL,
+      metadata JSON,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  """)
+  
+  # Hierarchical chunks with provenance
+  Exqlite.Sqlite3.execute(conn, """
+    CREATE TABLE IF NOT EXISTS chunks (
+      id TEXT PRIMARY KEY,
+      doc_id TEXT NOT NULL,
+      parent_id TEXT,
+      level TEXT NOT NULL,
+      text TEXT NOT NULL,
+      start_offset INTEGER NOT NULL,
+      end_offset INTEGER NOT NULL,
+      pagerank REAL DEFAULT 0.0,
+      FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
+    );
+  """)
+  
+  Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id);")
+  Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_chunks_parent ON chunks(parent_id);")
+  Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_chunks_level ON chunks(level);")
+  Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_chunks_doc_level ON chunks(doc_id, level);")
+  
+  # Vector index for chunks (replaces vec_documents)
+  embedding_dim = Mosaic.Config.get(:embedding_dim)
+  Exqlite.Sqlite3.execute(conn, """
+    CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(
+      id TEXT PRIMARY KEY,
+      embedding float[#{embedding_dim}]
+    );
+  """)
+end
 end

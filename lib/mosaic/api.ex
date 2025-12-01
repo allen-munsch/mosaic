@@ -38,6 +38,33 @@ defmodule Mosaic.API do
     end
   end
 
+post "/api/search/grounded" do
+  with {:ok, query} <- require_param(conn.body_params, "query") do
+    level = Map.get(conn.body_params, "level", "paragraph") |> String.to_atom()
+    opts = extract_search_opts(conn.body_params)
+    |> Keyword.put(:level, level)
+    |> Keyword.put(:expand_context, true)
+    
+    case Mosaic.QueryEngine.execute_query(query, opts) do
+      {:ok, results} ->
+        formatted = Enum.map(results, fn r ->
+          %{
+            id: r.id,
+            doc_id: r.doc_id,
+            text: r.text,
+            similarity: r.similarity,
+            grounding: format_grounding(r.grounding)
+          }
+        end)
+        json_ok(conn, %{results: formatted, level: level})
+      {:error, reason} ->
+        json_error(conn, 500, inspect(reason))
+    end
+  else
+    {:error, msg} -> json_error(conn, 400, msg)
+  end
+end
+
   # HOT PATH: Hybrid search (vector + SQL filter)
   post "/api/search/hybrid" do
     with {:ok, query} <- require_param(conn.body_params, "query") do
@@ -178,5 +205,16 @@ defmodule Mosaic.API do
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(status, Jason.encode!(%{error: message}))
+  end
+
+  defp format_grounding(nil), do: nil
+  defp format_grounding(%Mosaic.Grounding.Reference{} = ref) do
+    %{
+      doc_id: ref.doc_id,
+      citation: Mosaic.Grounding.Reference.to_citation(ref),
+      start_offset: ref.start_offset,
+      end_offset: ref.end_offset,
+      parent_context: ref.parent_context
+    }
   end
 end
