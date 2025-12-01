@@ -1,122 +1,162 @@
-# MosaicDB
+# **MosaicDB**
 
 <img src="docs/mosaicdb-logo-orange.jpg" alt="MosaicDB Logo" width="350">
 
+### **A Distributed, Federated Semantic Search Engine**
 
-### A Distributed, Federated Semantic Search Engine Built on SQLite Shards
+**Powered by SQLite shards, DuckDB analytics, and an Elixir/Erlang control plane.**
 
-MosaicDB is an experimental distributed query engine performing **hybrid vector + metadata search** across many **immutable SQLite shard files**. Each shard contains:
+MosaicDB is an experimental federated search and analytics engine that performs **hybrid semantic search (vector + metadata)** across many **immutable SQLite shard files**. Each shard stores embeddings, metadata, ranking signals, and document text — forming a lightweight, edge-friendly node in a distributed system.
 
-* Document text or metadata
-* Vector embeddings (`sqlite-vec`)
-* PageRank or other ranking signals
-
-Elixir acts as the **coordinator and control plane**, orchestrating fan-out queries, retries, merges, caching, and ranking.
+Elixir acts as the **coordinator and control plane**, orchestrating fan-out queries, retries, merges, caching, ranking, and analytics.
 
 ---
 
-## Features
+# **Core Capabilities**
 
-* Federated search across multiple SQLite shards
-* Vector similarity search using `sqlite-vec`
-* Metadata-aware filtering
-* PageRank-based reranking
-* LRU embedding cache
-* Distributed coordinator architecture
-* HTTP API for search
-* Metrics via Prometheus/Grafana
-* GPU-accelerated embeddings (optional)
+### **Search & Ranking**
 
-MosaicDB combines **SQLite simplicity with Erlang/Elixir scale**. Each node is a lightweight SQLite database capable of storing both vector embeddings and structured metadata. Distributed across multiple nodes, MosaicDB provides fault-tolerant, scalable storage **without the overhead of managed clusters**.
+* Vector similarity search via `sqlite-vec`
+* Metadata-aware filtering (SQL)
+* Hybrid ranking: **BM25 + vector fusion**
+* Additional signals: freshness, PageRank, etc.
+* Cross-encoder / LLM reranking
 
----
+### **Distributed Architecture**
 
-## Feature Comparison
+* Federated search across many SQLite shards
+* Elixir/Erlang supervision trees for fault tolerance
+* Distributed shard routing, retries, and fan-in merge
+* Optional GPU-accelerated embeddings
+* Lightweight: a “node” = a single SQLite file
 
-| Feature         | PostgreSQL                    | Pinecone      | Weaviate      | MosaicDB (SQLite nodes)           |
-| --------------- | ----------------------------- | ------------- | ------------- | --------------------------------- |
-| SQL support     | Yes                           | No            | No            | Yes, native SQLite queries        |
-| Vector search   | Extensions needed (pgvector)  | Yes           | Yes           | Yes, exact or approximate         |
-| Distribution    | Manual (sharding/replication) | Managed       | Managed       | Built-in via Elixir/Erlang        |
-| Fault tolerance | Manual / HA setups            | Cloud-managed | Cloud-managed | Erlang/Elixir supervision trees   |
-| Lightweight     | Moderate                      | No            | No            | Each node is a single SQLite file |
-| Edge-ready      | No                            | No            | No            | Yes, nodes are self-contained     |
+### **Hierarchical Retrieval**
 
-**Developer Pitch:**
+*(Experimental branch)*
 
-MosaicDB gives developers a **lightweight, distributed vector + relational database** where each node is just a SQLite file. Fully SQL-capable, fault-tolerant via Erlang/Elixir, and easy to deploy at the edge — you get vector search + relational queries in one place, without complex cluster management or cloud lock-in. It's **SQLite simplicity with Erlang reliability**.
+* Multi-level chunking: **document → paragraph → sentence**
+* Cross-level navigation
+* Context expansion
+* Multi-resolution embeddings
 
----
+### **Analytics**
 
-## Why Elixir?
+* **DuckDB warm path** for SQL analytics across shards
+* Window functions, joins, aggregations
+* Works alongside low-latency Hot Path vector search
 
-MosaicDB uses Elixir for its coordination layer because it naturally fits **federated query execution**:
+### **Caching & Observability**
 
-### Concurrency for fan-out search
-Each shard query runs as an isolated BEAM process—no thread pools, no shared state, no locks.
-
-### Supervisor-based fault tolerance
-Shard errors, timeouts, or node failures are isolated and automatically recovered.
-
-### Predictable under load
-The BEAM scheduler ensures slow shards do not block others.
-
-### Built-in distribution
-Elixir nodes auto-discover and form a cluster, enabling multi-node coordination without external registries.
-
-### Clean pipeline composition
-Query planning, merging, and reranking are expressed using functional pipelines and pattern matching.
-
-### Observability
-LiveDashboard, telemetry, and introspection tools simplify distributed debugging.
-
-**In short:** Elixir is the resilient, concurrent **control plane** around fast SQLite shards.
+* LRU embedding cache (ETS / Redis)
+* Query caches
+* Prometheus / Grafana metrics
+* Health checks + introspection endpoints
 
 ---
 
-## Performance Highlights
+# **Why SQLite + Elixir?**
 
-### CPU Performance
-- **Batch ingestion**: ~157ms per document
-- **Cold queries**: ~700-750ms (embedding + search)
-- **Hot queries**: ~8-16ms (cached embeddings, 44-81x faster)
-- **Throughput**: 10 parallel queries in 23ms
+Elixir provides the ideal **distributed coordination layer**:
 
-### GPU Performance (CUDA)
-- **Batch ingestion**: ~57ms per document (2.7x faster)
-- **Cold queries**: ~150-160ms (4-5x faster)
-- **Hot queries**: ~13-16ms (cached embeddings, 8-10x faster)
-- **Throughput**: 10 parallel queries in 17ms
+**Concurrency for fan-out queries**
+Each shard search runs as an isolated BEAM process — no locks, no thread pools.
+
+**Supervisor-based fault tolerance**
+Shard failures, timeouts, or panics self-heal automatically.
+
+**Predictable under heavy load**
+The BEAM scheduler prevents slow shards from blocking others.
+
+**Built-in clustering**
+Elixir nodes auto-discover and form a distributed topology without Zookeeper, Consul, etc.
+
+**Functional pipelines**
+Query planning, merging, and ranking are implemented cleanly using pattern matching and pipelines.
+
+**Observability**
+Telemetry, tracing, LiveDashboard, and metrics built-in.
+
+**In short:**
+**Elixir is the resilient, concurrent control plane around fast SQLite shards.**
 
 ---
 
-## Quick Start
+# **Feature Comparison**
 
-### CPU Version
+| Feature         | PostgreSQL        | Pinecone      | Weaviate      | **MosaicDB** (SQLite Shards) |
+| --------------- | ----------------- | ------------- | ------------- | ---------------------------- |
+| SQL support     | Yes               | No            | No            | **Yes (SQLite + DuckDB)**    |
+| Vector search   | pgvector required | Yes           | Yes           | **Yes (sqlite-vec)**         |
+| Distribution    | Manual            | Managed       | Managed       | **Built-in Elixir/Erlang**   |
+| Fault tolerance | Manual            | Cloud-managed | Cloud-managed | **Erlang supervision trees** |
+| Lightweight     | Medium            | No            | No            | **Yes: 1 shard = 1 file**    |
+| Edge-ready      | No                | No            | No            | **Yes**                      |
+
+---
+
+# **Developer Pitch**
+
+MosaicDB gives you a **distributed, self-contained semantic search engine** where:
+
+* Each node is just a **SQLite file**
+* The control plane is **Erlang-grade fault tolerant**
+* Vector search, SQL metadata filtering, and analytics are first-class
+* Deployment is trivial (edge, laptop, server)
+
+It’s **SQLite simplicity + Erlang reliability** — with semantic search, ranking, and analytics built in.
+
+---
+
+# **Performance Summary**
+
+### **CPU**
+
+* Batch ingest: ~157ms/doc
+* Cold search (embed + search): 700–750ms
+* Hot search (cached): **8–16ms**
+* Parallel throughput: **10 queries in 23ms**
+
+### **GPU (CUDA)**
+
+* Batch ingest: ~57ms/doc
+* Cold search: 150–160ms
+* Hot search: **13–16ms**
+* Parallel throughput: **10 queries in 17ms**
+
+---
+
+# **Quick Start**
+
+### CPU
+
 ```bash
 docker compose up --build
 ```
 
-### GPU Version (CUDA)
+### GPU (CUDA)
+
 ```bash
 docker compose -f docker-compose.cuda.yml up -d --build
 ```
 
-### Check Health
+### Health
+
 ```bash
 curl http://localhost/health
 ```
 
 ---
 
-## API
+# **API**
 
-### Health Check
+### Health
+
 ```bash
 curl http://localhost/health
 ```
 
 ### Search
+
 ```bash
 curl -X POST http://localhost/api/search \
   -H "Content-Type: application/json" \
@@ -125,15 +165,17 @@ curl -X POST http://localhost/api/search \
 
 ---
 
-## Load Testing
+# **Load Testing**
 
-### CPU Load Test
+### CPU
+
 ```bash
 docker compose up --build
 docker compose --profile load-test run --rm k6 run k6_tests/load_test.js
 ```
 
-### CUDA Load Test
+### GPU
+
 ```bash
 docker compose -f docker-compose.cuda.yml up -d
 docker compose -f docker-compose.cuda.yml --profile load-test run --rm k6 run k6_tests/load_test.js
@@ -141,34 +183,37 @@ docker compose -f docker-compose.cuda.yml --profile load-test run --rm k6 run k6
 
 ---
 
-## Development
+# **Development**
 
-Install dependencies:
+Install deps:
+
 ```bash
 mix deps.get
 ```
 
-Run the system:
+Run system:
+
 ```bash
 mix run --no-halt
 ```
 
 ---
 
-## Documentation
+# **Documentation**
 
-* `docs/ARCHITECTURE.md` — data flow, shard layout, search pipeline
-* `docs/DEPLOYMENT_GUIDE.md` — running MosaicDB in production
-* `docs/SHARD_FORMAT.md` — SQLite schema, embeddings, PageRank structure
+* `docs/ARCHITECTURE.md` — data flow, search paths, shard layout
+* `docs/DEPLOYMENT_GUIDE.md` — production deployment
+* `docs/SHARD_FORMAT.md` — SQLite schema, embeddings, ranking fields
 
 ---
 
-## License
+# **License**
 
 MIT
 
+---
 
-# mosaic_demo.sh
+# **Appendix: Demo Outputs**
 
 ```
 CPU: 13th Gen Intel(R) Core(TM) i9-13900H
@@ -178,7 +223,12 @@ Architecture:                            x86_64
 GPU: NVIDIA GeForce RTX 3050 vram 4GB
 ```
 
-## cpu
+
+**CPU Demo Output**
+
+<details>
+<summary>Click to expand</summary>
+
 
 ```
     __  ___                _      ____  ____ 
@@ -419,7 +469,13 @@ Complex aggregations federated across shards...
 
 ```
 
-## gpu
+</details>
+
+
+**GPU Demo Output**
+
+<details>
+<summary>Click to expand</summary>
 
 ```
     __  ___                _      ____  ____ 
@@ -657,5 +713,6 @@ Complex aggregations federated across shards...
     │  sqlite-vec │  HOT PATH  (<15ms)       │   DuckDB    │
     │   (search)  │                          │ (analytics) │
     └─────────────┘                          └─────────────┘
-
 ```
+
+</details>
