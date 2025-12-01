@@ -1,5 +1,8 @@
 # MosaicDB
 
+<img src="docs/mosaicdb-logo-orange.jpg" alt="MosaicDB Logo" width="350">
+
+
 ### A Distributed, Federated Semantic Search Engine Built on SQLite Shards
 
 MosaicDB is an experimental distributed query engine performing **hybrid vector + metadata search** across many **immutable SQLite shard files**. Each shard contains:
