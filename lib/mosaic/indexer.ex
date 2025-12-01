@@ -3,7 +3,7 @@ defmodule Mosaic.Indexer do
   require Logger
 
   @max_docs_per_shard 10_000
-  @max_concurrent 8  # Limit concurrent embedding calls
+  @max_concurrent 8
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
@@ -53,16 +53,45 @@ defmodule Mosaic.Indexer do
     {:noreply, %{state | semaphore: min(n + 1, @max_concurrent)}}
   end
 
+  alias Mosaic.Chunking.{Chunk, Splitter}
+
   defp do_index_document(id, text, metadata) do
     {_shard_id, shard_path, conn} = get_or_create_shard()
-    embedding = Mosaic.EmbeddingService.encode(text)
-    :ok = Mosaic.DB.execute(conn, "INSERT INTO documents (id, text, metadata, embedding) VALUES (?, ?, ?, ?)", [id, text, Jason.encode!(metadata), Jason.encode!(embedding)])
-    :ok = Mosaic.DB.execute(conn, "INSERT INTO vec_documents (id, embedding) VALUES (?, ?)", [id, Jason.encode!(embedding)])
+
+    :ok = Mosaic.DB.execute(conn,
+      "INSERT INTO documents (id, text, metadata) VALUES (?, ?, ?)",
+      [id, text, Jason.encode!(metadata)])
+
+    %{document: doc_chunk, paragraphs: paragraphs, sentences: sentences} =
+      Splitter.split(id, text)
+
+    all_chunks = [doc_chunk | paragraphs ++ sentences]
+    texts = Enum.map(all_chunks, & &1.text)
+    embeddings = Mosaic.EmbeddingService.encode_batch(texts)
+
+    all_chunks
+    |> Enum.zip(embeddings)
+    |> Enum.each(fn {chunk, embedding} ->
+      insert_chunk(conn, chunk, embedding)
+    end)
+
     Mosaic.ConnectionPool.checkin(shard_path, conn)
     increment_doc_count()
-    Logger.debug("Indexed document #{id}")
+    Logger.debug("Indexed document #{id} with #{length(all_chunks)} chunks")
   rescue
     e -> Logger.error("Failed to index #{id}: #{inspect(e)}")
+  end
+
+  defp insert_chunk(conn, %Chunk{} = chunk, embedding) do
+    :ok = Mosaic.DB.execute(conn, """
+      INSERT INTO chunks (id, doc_id, parent_id, level, text, start_offset, end_offset)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, [chunk.id, chunk.doc_id, chunk.parent_id, Atom.to_string(chunk.level),
+          chunk.text, chunk.start_offset, chunk.end_offset])
+
+    :ok = Mosaic.DB.execute(conn,
+      "INSERT INTO vec_chunks (id, embedding) VALUES (?, ?)",
+      [chunk.id, Jason.encode!(embedding)])
   end
 
   defp get_or_create_shard do
@@ -91,27 +120,99 @@ defmodule Mosaic.Indexer do
     end
   end
 
+  # FIXED: Now creates chunks instead of inserting into non-existent vec_documents
   defp insert_documents(conn, documents) do
-    texts = Enum.map(documents, fn {_id, text, _meta} -> text end)
-    embeddings = Mosaic.EmbeddingService.encode_batch(texts)
-    Enum.zip(documents, embeddings) |> Enum.each(fn {{id, text, meta}, emb} ->
-      :ok = Mosaic.DB.execute(conn, "INSERT INTO documents (id, text, metadata, embedding) VALUES (?, ?, ?, ?)", [id, text, Jason.encode!(meta), Jason.encode!(emb)])
-      :ok = Mosaic.DB.execute(conn, "INSERT INTO vec_documents (id, embedding) VALUES (?, ?)", [id, Jason.encode!(emb)])
+    Enum.each(documents, fn {id, text, meta} ->
+      :ok = Mosaic.DB.execute(conn,
+        "INSERT INTO documents (id, text, metadata) VALUES (?, ?, ?)",
+        [id, text, Jason.encode!(meta)])
+
+      %{document: doc_chunk, paragraphs: paragraphs, sentences: sentences} =
+        Splitter.split(id, text)
+
+      all_chunks = [doc_chunk | paragraphs ++ sentences]
+      texts = Enum.map(all_chunks, & &1.text)
+      embeddings = Mosaic.EmbeddingService.encode_batch(texts)
+
+      all_chunks
+      |> Enum.zip(embeddings)
+      |> Enum.each(fn {chunk, embedding} ->
+        insert_chunk(conn, chunk, embedding)
+      end)
     end)
     :ok
   end
 
   defp register_shard(shard_id, shard_path, documents) do
+    centroids = compute_level_centroids(shard_path)
+
     texts = Enum.map(documents, fn {_id, text, _meta} -> text end)
-    embeddings = Mosaic.EmbeddingService.encode_batch(texts)
-    dim = length(hd(embeddings))
-    centroid = embeddings |> Enum.reduce(List.duplicate(0.0, dim), fn emb, acc -> Enum.zip(emb, acc) |> Enum.map(fn {a, b} -> a + b end) end) |> Enum.map(&(&1 / length(embeddings)))
-    terms = texts |> Enum.flat_map(&String.split(&1, ~r/\W+/)) |> Enum.map(&String.downcase/1) |> Enum.filter(&(String.length(&1) > 2))
+    terms = texts
+    |> Enum.flat_map(&String.split(&1, ~r/\W+/))
+    |> Enum.map(&String.downcase/1)
+    |> Enum.filter(&(String.length(&1) > 2))
+
     bloom = Mosaic.BloomFilterManager.create_bloom_filter(terms)
-    GenServer.cast(Mosaic.ShardRouter, {:register_shard, %{id: shard_id, path: shard_path, centroid: centroid, doc_count: length(documents), bloom_filter: bloom}})
+
+    GenServer.cast(Mosaic.ShardRouter, {:register_shard, %{
+      id: shard_id,
+      path: shard_path,
+      centroids: centroids,
+      doc_count: length(documents),
+      bloom_filter: bloom
+    }})
+
     Mosaic.QueryEngine.invalidate_cache(shard_id)
     :ok
   end
+
+  defp compute_level_centroids(shard_path) do
+    {:ok, conn} = Mosaic.ConnectionPool.checkout(shard_path)
+
+    centroids = [:document, :paragraph, :sentence]
+    |> Enum.map(fn level ->
+      embeddings = fetch_level_embeddings(conn, level)
+      centroid = if Enum.empty?(embeddings), do: nil, else: compute_centroid(embeddings)
+      {level, centroid}
+    end)
+    |> Enum.reject(fn {_, c} -> is_nil(c) end)
+    |> Map.new()
+
+    Mosaic.ConnectionPool.checkin(shard_path, conn)
+
+    # Default centroid if no chunks found
+    if map_size(centroids) == 0 do
+      %{document: List.duplicate(0.0, Mosaic.Config.get(:embedding_dim))}
+    else
+      centroids
+    end
+  end
+
+  defp fetch_level_embeddings(conn, level) do
+    case Mosaic.DB.query(conn, """
+      SELECT vc.embedding FROM vec_chunks vc
+      JOIN chunks c ON vc.id = c.id
+      WHERE c.level = ?
+      LIMIT 1000
+    """, [Atom.to_string(level)]) do
+      {:ok, rows} -> Enum.map(rows, fn [emb] -> Jason.decode!(emb) end)
+      {:error, err} ->
+        Logger.error("Error fetching level embeddings: #{inspect(err)}")
+        []
+    end
+  end
+
+  defp compute_centroid(embeddings) do
+    dim = length(hd(embeddings))
+    count = length(embeddings)
+    embeddings
+    |> Enum.reduce(List.duplicate(0.0, dim), fn emb, acc ->
+      Enum.zip(emb, acc) |> Enum.map(fn {a, b} -> a + b end)
+    end)
+    |> Enum.map(&(&1 / count))
+  end
+
+
 
   defp generate_shard_id, do: "shard_#{:erlang.system_time(:millisecond)}_#{:rand.uniform(1000)}"
   defp shard_path_for(shard_id), do: Path.join(Mosaic.Config.get(:storage_path), "#{shard_id}.db")

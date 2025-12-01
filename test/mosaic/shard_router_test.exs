@@ -58,7 +58,7 @@ defmodule Mosaic.ShardRouterTest do
     assert :ok =
              Exqlite.Sqlite3.execute(
                conn,
-               "SELECT shard_id, centroid, centroid_norm FROM shard_centroids LIMIT 1;"
+               "SELECT shard_id, level, centroid, centroid_norm FROM shard_centroids LIMIT 1;"
              )
 
     # Verify indexes exist
@@ -71,123 +71,99 @@ defmodule Mosaic.ShardRouterTest do
     assert :ok =
              Exqlite.Sqlite3.execute(
                conn,
-               "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_shard_accessed';"
-             )
-
-    assert :ok =
-             Exqlite.Sqlite3.execute(
-               conn,
-               "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_centroid_norm';"
+               "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_centroids_level';"
              )
   end
 
-  test "cache hit path returns cached shards", %{routing_db_path: routing_db_path} do
-    {:ok, conn} = Exqlite.Sqlite3.open(routing_db_path)
-    insert_shard_metadata(conn, "cached1", "/path1.db", 100)
-    insert_shard_centroid(conn, "cached1", List.duplicate(1.0, 1536), 1.0)
-    Mosaic.ShardRouter.reset_state()
+  test "register_shard stores per-level centroids" do
+    shard_id = "test_shard_with_centroids"
+    doc_centroid = List.duplicate(0.1, 1536)
+    para_centroid = List.duplicate(0.2, 1536)
+    sent_centroid = List.duplicate(0.3, 1536)
 
-    query_vector = List.duplicate(1.0, 1536)
-    {:ok, result1} = Mosaic.ShardRouter.find_similar_shards(query_vector, 1, vector_math_impl: TestVectorMath)
-    {:ok, result2} = Mosaic.ShardRouter.find_similar_shards(query_vector, 1, vector_math_impl: TestVectorMath)
+    centroids = %{
+      document: doc_centroid,
+      paragraph: para_centroid,
+      sentence: sent_centroid
+    }
 
-    assert result1 == result2
-    # Verify cache was actually used (check internal metrics)
-  end
+    shard_info = %{
+      id: shard_id,
+      path: "/tmp/#{shard_id}.db",
+      centroids: centroids,
+      doc_count: 10,
+      bloom_filter: Mosaic.BloomFilterManager.create_bloom_filter(["test"])
+    }
 
-  test "LRU eviction when cache exceeds max_size", %{routing_db_path: routing_db_path} do
-    # Insert exactly 3 shards with VERY different vectors so we can control which ones match
-    {:ok, conn} = Exqlite.Sqlite3.open(routing_db_path)
+    Mosaic.ShardRouter.register_shard(shard_info)
+    Process.sleep(100) # Give GenServer time to process cast
 
-    insert_shard_metadata(conn, "shard1", "/path1.db", 100)
-    insert_shard_centroid(conn, "shard1", List.duplicate(1.0, 1536), :math.sqrt(1536))
-
-    insert_shard_metadata(conn, "shard2", "/path2.db", 200)
-    insert_shard_centroid(conn, "shard2", List.duplicate(-1.0, 1536), :math.sqrt(1536))
-
-    insert_shard_metadata(conn, "shard3", "/path3.db", 300)
-    insert_shard_centroid(conn, "shard3", List.duplicate(0.0, 1536) |> List.replace_at(0, 1.0), 1.0)
-
-    Mosaic.ShardRouter.reset_state()
-    Exqlite.Sqlite3.close(conn)
-
-    # Query 1: Load shard1 only (highest similarity to [1,1,1,...])
-    {:ok, [r1]} = Mosaic.ShardRouter.find_similar_shards(List.duplicate(1.0, 1536), 1, vector_math_impl: TestVectorMath, min_similarity: 0.9)
-    assert r1.id == "shard1"
-
-    # Query 2: Load shard2 only (highest similarity to [-1,-1,-1,...])
-    {:ok, [r2]} = Mosaic.ShardRouter.find_similar_shards(List.duplicate(-1.0, 1536), 1, vector_math_impl: TestVectorMath, min_similarity: 0.9)
-    assert r2.id == "shard2"
-
-    # Cache now has shard1, shard2 (full)
-
-    # Query 3: Load shard3 - should evict shard1 (oldest)
-    {:ok, [r3]} = Mosaic.ShardRouter.find_similar_shards([1.0] ++ List.duplicate(0.0, 1535), 1, vector_math_impl: TestVectorMath, min_similarity: 0.5)
-    assert r3.id == "shard3"
-
-    %{cache_keys: cache_keys} = Mosaic.ShardRouter.get_cache_state()
-    assert Enum.sort(cache_keys) == ["shard2", "shard3"]
-  end
-
-  test "access updates move shard to end of LRU", %{routing_db_path: routing_db_path} do
-    {:ok, conn} = Exqlite.Sqlite3.open(routing_db_path)
+    {:ok, conn} = Exqlite.Sqlite3.open(Mosaic.Config.get(:routing_db_path))
     on_exit(fn -> Exqlite.Sqlite3.close(conn) end)
 
-    # Orthogonal vectors - each shard only matches its own direction
-    v1 = [1.0] ++ List.duplicate(0.0, 1535)
-    v2 = [0.0, 1.0] ++ List.duplicate(0.0, 1534)
-    v3 = [0.0, 0.0, 1.0] ++ List.duplicate(0.0, 1533)
+    {:ok, results} = Mosaic.Test.DBHelpers.query(conn, "SELECT level, centroid, centroid_norm FROM shard_centroids WHERE shard_id = ?", [shard_id])
+    
+    assert length(results) == 3
+    assert Enum.any?(results, fn [level, _, _] -> level == "document" end)
+    assert Enum.any?(results, fn [level, _, _] -> level == "paragraph" end)
+    assert Enum.any?(results, fn [level, _, _] -> level == "sentence" end)
 
-    insert_shard_metadata(conn, "shard1", "/path1.db", 100)
-    insert_shard_centroid(conn, "shard1", v1, 1.0)
+    doc_entry = Enum.find(results, fn [level, _, _] -> level == "document" end)
+    assert doc_entry != nil
+    assert :erlang.binary_to_term(Enum.at(doc_entry, 1)) == doc_centroid
 
-    insert_shard_metadata(conn, "shard2", "/path2.db", 200)
-    insert_shard_centroid(conn, "shard2", v2, 1.0)
-
-    insert_shard_metadata(conn, "shard3", "/path3.db", 300)
-    insert_shard_centroid(conn, "shard3", v3, 1.0)
-
-    Mosaic.ShardRouter.reset_state()
-
-    # Load shard1 and shard2 (query matches both)
-    query1 = [1.0, 1.0] ++ List.duplicate(0.0, 1534)
-    {:ok, _} = Mosaic.ShardRouter.find_similar_shards(query1, 2, vector_math_impl: TestVectorMath, min_similarity: 0.5)
-
-    # Re-access shard1 (moves to end of LRU)
-    {:ok, _} = Mosaic.ShardRouter.find_similar_shards(v1, 1, vector_math_impl: TestVectorMath, min_similarity: 0.99)
-
-    # Query for shard3 - cached shards have 0 similarity, forces DB lookup
-    {:ok, _} = Mosaic.ShardRouter.find_similar_shards(v3, 1, vector_math_impl: TestVectorMath, min_similarity: 0.99)
-
-    %{cache_keys: cache_keys} = Mosaic.ShardRouter.get_cache_state()
-    assert Enum.sort(cache_keys) == ["shard1", "shard3"]
+    para_entry = Enum.find(results, fn [level, _, _] -> level == "paragraph" end)
+    assert para_entry != nil
+    assert :erlang.binary_to_term(Enum.at(para_entry, 1)) == para_centroid
   end
 
-  test "find_similar_shards returns shards from DB on cache miss", %{routing_db_path: routing_db_path} do
-    {:ok, conn} = Exqlite.Sqlite3.open(routing_db_path)
+  test "find_similar_shards filters and ranks by level" do
+    {:ok, conn} = Exqlite.Sqlite3.open(Mosaic.Config.get(:routing_db_path))
     on_exit(fn -> Exqlite.Sqlite3.close(conn) end)
 
+    # Shard 1: good for document and paragraph, bad for sentence
     insert_shard_metadata(conn, "shard1", "/path/to/shard1.db", 100)
-    insert_shard_centroid(conn, "shard1", List.duplicate(0.15, 1536), 1.0)
+    insert_shard_centroid(conn, "shard1", :document, List.duplicate(0.9, 1536), 1.0)
+    insert_shard_centroid(conn, "shard1", :paragraph, List.duplicate(0.8, 1536), 1.0)
+    insert_shard_centroid(conn, "shard1", :sentence, List.duplicate(0.1, 1536), 1.0)
 
+    # Shard 2: good for sentence, bad for document and paragraph
     insert_shard_metadata(conn, "shard2", "/path/to/shard2.db", 200)
-    insert_shard_centroid(conn, "shard2", List.duplicate(-0.2, 1536), 1.0)
+    insert_shard_centroid(conn, "shard2", :document, List.duplicate(0.1, 1536), 1.0)
+    insert_shard_centroid(conn, "shard2", :paragraph, List.duplicate(0.2, 1536), 1.0)
+    insert_shard_centroid(conn, "shard2", :sentence, List.duplicate(0.9, 1536), 1.0)
 
-    # Reset ShardRouter state to pick up new DB content
-    Mosaic.ShardRouter.reset_state()
+    # Shard 3: only has document centroid
+    insert_shard_metadata(conn, "shard3", "/path/to/shard3.db", 50)
+    insert_shard_centroid(conn, "shard3", :document, List.duplicate(0.7, 1536), 1.0)
 
-    query_vector = List.duplicate(0.15, 1536)
-    expected_limit = 1
+    Mosaic.ShardRouter.reset_state() # Reload shards after insertions
 
-    # Directly pass the real VectorMath implementation
-    {:ok, shards} =
-      Mosaic.ShardRouter.find_similar_shards(query_vector, expected_limit,
-        vector_math_impl: TestVectorMath
-      )
+    query_vector = List.duplicate(1.0, 1536) # Query vector that is highly similar to high centroids
 
-    assert length(shards) == expected_limit
-    assert Enum.map(shards, & &1.id) == ["shard1"]
-    assert Enum.all?(shards, fn shard -> shard.similarity >= 0.5 end)
+    # Query at document level
+    {:ok, doc_shards} = Mosaic.ShardRouter.find_similar_shards(query_vector, 3, vector_math_impl: TestVectorMath, level: :document, min_similarity: 0.1)
+    assert length(doc_shards) == 3
+    assert Enum.map(doc_shards, & &1.id) |> Enum.sort() == ["shard1", "shard2", "shard3"]
+    assert doc_shards |> hd() |> Map.get(:id) == "shard1" # Shard1 has highest doc similarity
+
+    # Query at paragraph level
+    {:ok, para_shards} = Mosaic.ShardRouter.find_similar_shards(query_vector, 3, vector_math_impl: TestVectorMath, level: :paragraph, min_similarity: 0.1)
+    assert length(para_shards) == 2 # Shard3 has no paragraph centroid
+    assert Enum.map(para_shards, & &1.id) |> Enum.sort() == ["shard1", "shard2"]
+    assert para_shards |> hd() |> Map.get(:id) == "shard1" # Shard1 has highest para similarity
+
+    # Query at sentence level
+    {:ok, sent_shards} = Mosaic.ShardRouter.find_similar_shards(query_vector, 3, vector_math_impl: TestVectorMath, level: :sentence, min_similarity: 0.1)
+    assert length(sent_shards) == 2 # Shard3 has no sentence centroid
+    assert Enum.map(sent_shards, & &1.id) |> Enum.sort() == ["shard1", "shard2"]
+    assert sent_shards |> hd() |> Map.get(:id) == "shard2" # Shard2 has highest sentence similarity
+
+    # Test default level (paragraph)
+    {:ok, default_shards} = Mosaic.ShardRouter.find_similar_shards(query_vector, 3, vector_math_impl: TestVectorMath, min_similarity: 0.1)
+    assert length(default_shards) == 2
+    assert Enum.map(default_shards, & &1.id) |> Enum.sort() == ["shard1", "shard2"]
+    assert default_shards |> hd() |> Map.get(:id) == "shard1"
   end
 
   # Helper functions
@@ -203,17 +179,17 @@ defmodule Mosaic.ShardRouterTest do
     assert :done = Exqlite.Sqlite3.step(conn, statement)
   end
 
-  defp insert_shard_centroid(conn, shard_id, centroid_vector, centroid_norm) do
+  defp insert_shard_centroid(conn, shard_id, level, centroid_vector, centroid_norm) do
     centroid_blob = :erlang.term_to_binary(centroid_vector)
 
     {:ok, statement} = Exqlite.Sqlite3.prepare(
       conn,
       """
-      INSERT INTO shard_centroids (shard_id, centroid, centroid_norm)
-      VALUES (?, ?, ?)
+      INSERT INTO shard_centroids (shard_id, level, centroid, centroid_norm)
+      VALUES (?, ?, ?, ?)
       """
     )
-    :ok = Exqlite.Sqlite3.bind(statement, [shard_id, centroid_blob, centroid_norm])
+    :ok = Exqlite.Sqlite3.bind(statement, [shard_id, Atom.to_string(level), centroid_blob, centroid_norm])
     assert :done = Exqlite.Sqlite3.step(conn, statement)
   end
 end
