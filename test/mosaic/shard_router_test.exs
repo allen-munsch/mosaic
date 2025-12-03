@@ -101,7 +101,7 @@ defmodule Mosaic.ShardRouterTest do
     {:ok, conn} = Exqlite.Sqlite3.open(Mosaic.Config.get(:routing_db_path))
     on_exit(fn -> Exqlite.Sqlite3.close(conn) end)
 
-    {:ok, results} = Mosaic.Test.DBHelpers.query(conn, "SELECT level, centroid, centroid_norm FROM shard_centroids WHERE shard_id = ?", [shard_id])
+    {:ok, results} = Mosaic.DBHelpers.query(conn, "SELECT level, centroid, centroid_norm FROM shard_centroids WHERE shard_id = ?", [shard_id])
     
     assert length(results) == 3
     assert Enum.any?(results, fn [level, _, _] -> level == "document" end)
@@ -118,27 +118,41 @@ defmodule Mosaic.ShardRouterTest do
   end
 
   test "find_similar_shards filters and ranks by level" do
-    {:ok, conn} = Exqlite.Sqlite3.open(Mosaic.Config.get(:routing_db_path))
-    on_exit(fn -> Exqlite.Sqlite3.close(conn) end)
+    # Shard 1
+    shard1_id = "shard1"
+    shard1_centroids = %{
+      document: List.duplicate(0.9, 1536),
+      paragraph: List.duplicate(0.8, 1536),
+      sentence: List.duplicate(0.1, 1536)
+    }
+    Mosaic.ShardRouter.register_shard(%{
+      id: shard1_id, path: "/path/to/shard1.db", doc_count: 100,
+      centroids: shard1_centroids, bloom_filter: Mosaic.BloomFilterManager.create_bloom_filter([])
+    })
 
-    # Shard 1: good for document and paragraph, bad for sentence
-    insert_shard_metadata(conn, "shard1", "/path/to/shard1.db", 100)
-    insert_shard_centroid(conn, "shard1", :document, List.duplicate(0.9, 1536), 1.0)
-    insert_shard_centroid(conn, "shard1", :paragraph, List.duplicate(0.8, 1536), 1.0)
-    insert_shard_centroid(conn, "shard1", :sentence, List.duplicate(0.1, 1536), 1.0)
+    # Shard 2
+    shard2_id = "shard2"
+    shard2_centroids = %{
+      document: List.duplicate(0.1, 1536),
+      paragraph: List.duplicate(0.2, 1536),
+      sentence: List.duplicate(0.9, 1536)
+    }
+    Mosaic.ShardRouter.register_shard(%{
+      id: shard2_id, path: "/path/to/shard2.db", doc_count: 200,
+      centroids: shard2_centroids, bloom_filter: Mosaic.BloomFilterManager.create_bloom_filter([])
+    })
 
-    # Shard 2: good for sentence, bad for document and paragraph
-    insert_shard_metadata(conn, "shard2", "/path/to/shard2.db", 200)
-    insert_shard_centroid(conn, "shard2", :document, List.duplicate(0.1, 1536), 1.0)
-    insert_shard_centroid(conn, "shard2", :paragraph, List.duplicate(0.2, 1536), 1.0)
-    insert_shard_centroid(conn, "shard2", :sentence, List.duplicate(0.9, 1536), 1.0)
+    # Shard 3
+    shard3_id = "shard3"
+    shard3_centroids = %{
+      document: List.duplicate(0.7, 1536)
+    }
+    Mosaic.ShardRouter.register_shard(%{
+      id: shard3_id, path: "/path/to/shard3.db", doc_count: 50,
+      centroids: shard3_centroids, bloom_filter: Mosaic.BloomFilterManager.create_bloom_filter([])
+    })
 
-    # Shard 3: only has document centroid
-    insert_shard_metadata(conn, "shard3", "/path/to/shard3.db", 50)
-    insert_shard_centroid(conn, "shard3", :document, List.duplicate(0.7, 1536), 1.0)
-
-    Mosaic.ShardRouter.reset_state() # Reload shards after insertions
-
+    # The rest of the test remains the same
     query_vector = List.duplicate(1.0, 1536) # Query vector that is highly similar to high centroids
 
     # Query at document level
@@ -164,32 +178,5 @@ defmodule Mosaic.ShardRouterTest do
     assert length(default_shards) == 2
     assert Enum.map(default_shards, & &1.id) |> Enum.sort() == ["shard1", "shard2"]
     assert default_shards |> hd() |> Map.get(:id) == "shard1"
-  end
-
-  # Helper functions
-  defp insert_shard_metadata(conn, id, path, doc_count) do
-    {:ok, statement} = Exqlite.Sqlite3.prepare(
-      conn,
-      """
-      INSERT INTO shard_metadata (id, path, doc_count, status, created_at, updated_at)
-      VALUES (?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      """
-    )
-    :ok = Exqlite.Sqlite3.bind(statement, [id, path, doc_count])
-    assert :done = Exqlite.Sqlite3.step(conn, statement)
-  end
-
-  defp insert_shard_centroid(conn, shard_id, level, centroid_vector, centroid_norm) do
-    centroid_blob = :erlang.term_to_binary(centroid_vector)
-
-    {:ok, statement} = Exqlite.Sqlite3.prepare(
-      conn,
-      """
-      INSERT INTO shard_centroids (shard_id, level, centroid, centroid_norm)
-      VALUES (?, ?, ?, ?)
-      """
-    )
-    :ok = Exqlite.Sqlite3.bind(statement, [shard_id, Atom.to_string(level), centroid_blob, centroid_norm])
-    assert :done = Exqlite.Sqlite3.step(conn, statement)
   end
 end

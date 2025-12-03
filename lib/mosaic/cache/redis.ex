@@ -39,6 +39,12 @@ defmodule Mosaic.Cache.Redis do
     GenServer.call(name, :clear)
   end
 
+  @impl Mosaic.Cache
+  def get_many(keys, name \\ __MODULE__), do: GenServer.call(name, {:get_many, keys})
+
+  @impl Mosaic.Cache
+  def put_many(entries, ttl, name \\ __MODULE__), do: GenServer.call(name, {:put_many, entries, ttl})
+
   @impl true
   def handle_call({:get, key}, _from, %{conn: conn} = state) do
     result =
@@ -60,6 +66,34 @@ defmodule Mosaic.Cache.Redis do
       end
     {:reply, normalize_result(result), state}
   end
+
+  @impl true
+  def handle_call({:get_many, keys}, _from, %{conn: conn} = state) do
+    results = Enum.reduce(keys, %{}, fn key, acc ->
+      case Redix.command(conn, ["GET", key]) do
+        {:ok, nil} -> acc
+        {:ok, val} -> Map.put(acc, key, Jason.decode!(val))
+        _ -> acc
+      end
+    end)
+    {:reply, results, state}
+  end
+
+  @impl true
+  def handle_call({:put_many, entries, ttl}, _from, %{conn: conn} = state) do
+    Enum.each(entries, fn {key, value} ->
+      encoded = Jason.encode!(value)
+      case ttl do
+        :infinity -> Redix.command(conn, ["SET", key, encoded])
+        seconds -> Redix.command(conn, ["SETEX", key, seconds, encoded])
+      end
+    end)
+    {:reply, :ok, state}
+  end
+
+
+
+
 
   @impl true
   def handle_call({:delete, key}, _from, %{conn: conn} = state) do

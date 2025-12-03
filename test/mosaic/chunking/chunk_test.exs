@@ -13,7 +13,7 @@ defmodule Mosaic.Chunking.ChunkTest do
     assert chunk.level == :document
     assert chunk.text == text
     assert chunk.start_offset == 0
-    assert chunk.end_offset == String.length(text)
+    assert chunk.end_offset == byte_size(text)
     assert chunk.embedding == nil
   end
 
