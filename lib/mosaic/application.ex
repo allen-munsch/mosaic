@@ -11,9 +11,7 @@ defmodule Mosaic.Application do
 
   def start(_type, _args) do
     Logger.info("Starting MosaicDB")
-    {:ok, _} = Mosaic.Config.start_link()
-    configure_nx_backend()
-
+    
     children = [
       # Cluster coordination
       {Cluster.Supervisor, [topologies(), [name: Mosaic.ClusterSupervisor]]},
@@ -68,7 +66,8 @@ defmodule Mosaic.Application do
       # API
       {Plug.Cowboy, scheme: :http, plug: Mosaic.API, options: [port: port()]}
     ]
-
+    
+    configure_nx_backend()
     Supervisor.start_link(children, strategy: :one_for_one, name: Mosaic.Supervisor)
   end
 

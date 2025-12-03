@@ -2,11 +2,14 @@ defmodule Mosaic.EmbeddingService do
   use GenServer
   require Logger
   @timeout 5_000
-  @zero_embedding List.duplicate(0.0, 384)
+
+  defp zero_embedding, do: List.duplicate(0.0, Mosaic.Config.get(:embedding_dim, 384))
 
   defmodule State do
     defstruct [:model_type, :model_ref]
   end
+
+
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
@@ -47,7 +50,7 @@ defmodule Mosaic.EmbeddingService do
       {:ok, embeddings} -> embeddings
       nil ->
         Logger.warning("Batch embedding timeout, returning zeros")
-        Enum.map(texts, fn _ -> @zero_embedding end)
+        Enum.map(texts, fn _ -> zero_embedding() end)
     end
   end
 
@@ -62,7 +65,7 @@ defmodule Mosaic.EmbeddingService do
         embedding
       nil ->
         Logger.warning("Embedding timeout for: #{String.slice(text, 0, 50)}...")
-        @zero_embedding
+        zero_embedding()
     end
   end
 

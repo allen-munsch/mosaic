@@ -1,10 +1,12 @@
 defmodule Mosaic.EmbeddingServiceTest do
   use ExUnit.Case, async: false
 
+  @embedding_dim 384  # Hardcode for tests
+
   @tag :slow
   test "encode/1 returns cached embedding on cache hit" do
     text = "cached test query"
-    embedding = List.duplicate(0.5, Mosaic.Config.get(:embedding_dim))
+    embedding = List.duplicate(0.5, @embedding_dim)
     
     Mosaic.EmbeddingCache.put(text, embedding)
     assert Mosaic.EmbeddingService.encode(text) == embedding
@@ -16,7 +18,7 @@ defmodule Mosaic.EmbeddingServiceTest do
     embedding = Mosaic.EmbeddingService.encode(text)
     
     assert is_list(embedding)
-    assert length(embedding) == Mosaic.Config.get(:embedding_dim)
+    assert length(embedding) == @embedding_dim
   end
 
   @tag :slow  

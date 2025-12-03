@@ -2,6 +2,7 @@ defmodule Mosaic.ConnectionPool do
   use GenServer
   require Logger
 
+
   @moduledoc """
   This module manages a pool of SQLite connections for each shard,
   providing features like health checks, automatic reconnection, and WAL checkpoint management.
@@ -25,6 +26,7 @@ defmodule Mosaic.ConnectionPool do
   def checkin(shard_path, conn), do: GenServer.cast(__MODULE__, {:checkin, shard_path, conn})
 
   def handle_call({:checkout, shard_path}, _from, state) do
+    Logger.debug("Checkout called with: #{inspect(shard_path)}")
     pool = Map.get(state.pools, shard_path, [])
     max_per_shard = state.config.max_per_shard
 
@@ -36,7 +38,9 @@ defmodule Mosaic.ConnectionPool do
       [] ->
         case open_with_extensions(shard_path, state.config) do
           {:ok, conn} -> {:reply, {:ok, conn}, state}
-          error -> {:reply, error, state}
+          {:error, reason} = error ->
+            Logger.error("Failed to open #{shard_path}: #{inspect(reason)}")
+            {:reply, error, state}
         end
       [conn | rest] ->
         if connection_healthy?(conn) do
@@ -72,31 +76,29 @@ defmodule Mosaic.ConnectionPool do
   end
 
   defp open_with_extensions(shard_path, config) do
-    case Exqlite.Sqlite3.open(shard_path) do
-      {:ok, conn} ->
-        :ok = Exqlite.Sqlite3.enable_load_extension(conn, true)
-        load_ext(conn, sqlite_vec_path())
-
-        # Apply pragmas
-        Exqlite.Sqlite3.execute(conn, "PRAGMA busy_timeout = #{config.busy_timeout};")
-        Exqlite.Sqlite3.execute(conn, "PRAGMA wal_autocheckpoint = #{config.wal_autocheckpoint};")
-        Exqlite.Sqlite3.execute(conn, "PRAGMA journal_size_limit = #{config.journal_size_limit};")
-
-        {:ok, conn}
-      error -> error
+    unless File.exists?(shard_path) do
+      Logger.error("File does not exist: #{shard_path}")
+      {:error, {:file_not_found, shard_path}}
+    else
+      case Exqlite.Sqlite3.open(shard_path) do
+        {:ok, conn} ->
+          try do
+            Exqlite.Sqlite3.enable_load_extension(conn, true)
+            Mosaic.StorageManager.load_vec_extension(conn)
+            Exqlite.Sqlite3.execute(conn, "PRAGMA busy_timeout = #{config.busy_timeout};")
+            Exqlite.Sqlite3.execute(conn, "PRAGMA wal_autocheckpoint = #{config.wal_autocheckpoint};")
+            Exqlite.Sqlite3.execute(conn, "PRAGMA journal_size_limit = #{config.journal_size_limit};")
+            {:ok, conn}
+          rescue
+            e ->
+              Logger.error("Extension loading failed: #{inspect(e)}")
+              Exqlite.Sqlite3.close(conn)
+              {:error, {:extension_failed, e}}
+          end
+        {:error, reason} ->
+          Logger.error("SQLite open failed for #{shard_path}: #{inspect(reason)}")
+          {:error, {:open_failed, reason}}
+      end
     end
-  rescue
-    e -> {:error, e}
-  end
-
-  defp load_ext(conn, ext_path) do
-    {:ok, stmt} = Exqlite.Sqlite3.prepare(conn, "SELECT load_extension(?)")
-    :ok = Exqlite.Sqlite3.bind(stmt, [ext_path])
-    Exqlite.Sqlite3.step(conn, stmt)
-    Exqlite.Sqlite3.release(conn, stmt)
-  end
-
-  defp sqlite_vec_path do
-    System.get_env("SQLITE_VEC_PATH") || "deps/sqlite_vec/priv/0.1.5/vec0"
   end
 end

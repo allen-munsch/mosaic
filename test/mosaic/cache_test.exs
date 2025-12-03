@@ -18,6 +18,7 @@ defmodule Mosaic.CacheTest do
 
   # --- Redis Backend Tests ---
   describe "Redis Cache Backend" do
+    @describetag :redis
     setup do
       name = :"redis_cache_#{System.unique_integer([:positive])}"
       start_opts = [name: name, url: Mosaic.Config.get(:redis_url)]

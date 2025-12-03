@@ -3,5 +3,5 @@ import Config
 config :nx, :default_backend, EXLA.Backend
 config :bumblebee, :default_backend, EXLA.Backend
 
-config :logger, level: :info
+config :logger, level: :warning
 import_config "#{config_env()}.exs"

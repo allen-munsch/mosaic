@@ -2,12 +2,12 @@ services:
   # ============================================================================
   # Mosaic Coordinator Node (Placeholder - runs minimal HTTP server)
   # ============================================================================
-  mosaic:
+  mosaic-cuda:
     build:
       context: .
       dockerfile: ./Dockerfile.cuda
-    container_name: mosaic
-    hostname: mosaic
+    container_name: mosaic-cuda
+    hostname: mosaic-cuda
     working_dir: /app
     environment:
       - PORT=4040
@@ -28,13 +28,14 @@ services:
       - mosaic
       - redis-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://mosaic:4040/health"]
+      test: ["CMD", "curl", "-f", "http://mosaic-cuda:4040/health"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 20s
     restart: unless-stopped
-    runtime: nvidia
+    devices:
+      - nvidia.com/gpu=all
     ulimits:
       nofile:
         soft: 65536
@@ -74,9 +75,9 @@ services:
     networks:
       - mosaic
     depends_on:
-      - mosaic
+      - mosaic-cuda
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://mosaic:4040/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://mosaic-cuda:4040/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -131,7 +132,7 @@ services:
     networks:
       - mosaic
     depends_on:
-      mosaic:
+      mosaic-cuda:
         condition: service_healthy # Ensure mosaic is healthy before k6 runs
 
 

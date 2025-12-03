@@ -46,43 +46,29 @@ defmodule Mosaic.HybridQuery do
   end
 
   defp do_vector_search(conn, embedding, sql_filter, limit) do
-    vector_json = Jason.encode!(embedding)
-    where_clause = if sql_filter, do: "AND #{sql_filter}", else: ""
-
-    sql = """
-    SELECT d.id, d.text, d.metadata, d.created_at, d.pagerank, vec_distance_cosine(d.embedding, ?) as distance
-    FROM documents d
-    WHERE 1=1 #{where_clause}
+  vector_json = Jason.encode!(embedding)
+  where_clause = if sql_filter, do: "AND #{sql_filter}", else: ""
+  sql = """
+    SELECT c.id, c.doc_id, c.text, d.metadata, d.created_at, c.pagerank, vec_distance_cosine(vc.embedding, ?) as distance
+    FROM chunks c
+    JOIN vec_chunks vc ON c.id = vc.id
+    JOIN documents d ON c.doc_id = d.id
+    WHERE c.level = 'paragraph' #{where_clause}
     ORDER BY distance ASC
     LIMIT ?
-    """
-
-    {:ok, stmt} = Exqlite.Sqlite3.prepare(conn, sql)
-    :ok = Exqlite.Sqlite3.bind(stmt, [vector_json, limit])
-    rows = fetch_all_rows(conn, stmt, [])
-    Exqlite.Sqlite3.release(conn, stmt)
-
-    Enum.map(rows, fn [id, text, metadata, created_at, pagerank, distance] ->
-      %{
-        id: id,
-        text: text,
-        metadata: safe_decode(metadata),
-        created_at: parse_datetime(created_at),
-        pagerank: pagerank || 0.0,
-        similarity: distance_to_similarity(distance)
-      }
-    end)
+  """
+  case Mosaic.DB.query(conn, sql, [vector_json, limit]) do
+    {:ok, rows} ->
+      Enum.map(rows, fn [id, doc_id, text, metadata, created_at, pagerank, distance] ->
+        %{id: id, doc_id: doc_id, text: text, metadata: safe_decode(metadata), created_at: parse_datetime(created_at), pagerank: pagerank || 0.0, similarity: distance_to_similarity(distance)}
+      end)
+    {:error, err} ->
+      Logger.warning("Vector search error: #{inspect(err)}")
+      []
   end
+end
 
-  defp fetch_all_rows(conn, stmt, acc) do
-    case Exqlite.Sqlite3.step(conn, stmt) do
-      {:row, row} -> fetch_all_rows(conn, stmt, [row | acc])
-      :done -> Enum.reverse(acc)
-      {:error, reason} ->
-        Logger.warning("SQLite error: #{inspect(reason)}")
-        Enum.reverse(acc)
-    end
-  end
+
 
   defp distance_to_similarity(nil), do: 0.0
   defp distance_to_similarity(d) when is_number(d), do: 1.0 / (1.0 + d)

@@ -1,74 +1,68 @@
 defmodule Mosaic.QueryEngineTest do
   use ExUnit.Case, async: false
+  import Mosaic.TestHelpers
 
-  # These tests require full application stack (Redis, Config, etc.)
-  # Run with: mix test --only integration
+  setup context do
+    {:ok, setup_context} = Mosaic.TestHelpers.setup_integration_test(context)
+    on_exit(setup_context.on_exit)
+    {:ok, setup_context}
+  end
 
-  setup do
-    temp_dir = Path.join(System.tmp_dir!(), "test_query_#{System.unique_integer([:positive])}")
-    File.mkdir_p!(temp_dir)
-    on_exit(fn -> File.rm_rf!(temp_dir) end)
+  describe "multi-level retrieval" do
+    test "retrieves chunks at specified levels" do
+      doc_id = "multi_level_doc"
+      text = """
+      First paragraph has one sentence.
 
-    # Check if QueryEngine is running
-    unless Process.whereis(Mosaic.QueryEngine) do
-      raise "QueryEngine not started - check application supervision"
-    end
-    case Process.whereis(Mosaic.QueryEngine) do
-      nil -> {:ok, skip: true, temp_dir: temp_dir}
-      _pid -> {:ok, skip: false, temp_dir: temp_dir}
+      Second paragraph. Has two sentences.
+
+      Third paragraph here.
+      """
+
+      {result, conn} = index_and_connect(doc_id, text)
+
+      # Document level
+      doc_results = assert_query_returns_results("First paragraph", level: :document, min_similarity: 0.01)
+      assert hd(doc_results).level == :document
+      assert hd(doc_results).text =~ "First paragraph"
+
+      # Paragraph level
+      para_results = assert_query_returns_results("Second paragraph", level: :paragraph, min_similarity: 0.01)
+      assert Enum.all?(para_results, &(&1.level == :paragraph))
+
+      # Sentence level
+      sent_results = assert_query_returns_results("one sentence", level: :sentence, min_similarity: 0.01)
+      assert Enum.all?(sent_results, &(&1.level == :sentence))
+
+      cleanup_conn(result.shard_path, conn)
     end
   end
 
-  describe "execute_query/2" do
-    @tag :integration
-    test "returns results for valid query", %{skip: skip} do
-      if skip do
-        :ok
-      else
-        result = Mosaic.QueryEngine.execute_query("test query", limit: 5)
-        assert match?({:ok, _}, result) or match?({:error, _}, result)
-      end
+  describe "grounding expansion" do
+    test "expands results with grounding info" do
+      doc_id = "grounding_doc"
+      text = "This is a very important sentence. It talks about many things."
+
+      {result, conn} = index_and_connect(doc_id, text)
+
+      results = assert_query_returns_results("important sentence", level: :sentence, expand_context: true, min_similarity: 0.01)
+      r = hd(results)
+
+      assert r.grounding != nil
+      assert r.grounding.doc_id == doc_id
+      assert r.grounding.doc_text == text
+      assert r.grounding.chunk_text == r.text
+
+      cleanup_conn(result.shard_path, conn)
     end
 
-    @tag :integration
-    test "respects limit option", %{skip: skip} do
-      if skip do
-        :ok
-      else
-        case Mosaic.QueryEngine.execute_query("test", limit: 3) do
-          {:ok, results} -> assert length(results) <= 3
-          {:error, _} -> :ok
-        end
-      end
-    end
+    test "returns nil grounding when expand_context: false" do
+      {result, conn} = index_and_connect("no_ground_doc", "Test sentence here.")
 
-    @tag :integration
-    test "caches results on subsequent identical queries", %{skip: skip} do
-      if skip do
-        :ok
-      else
-        query = "cacheable_query_#{System.unique_integer()}"
-        result1 = Mosaic.QueryEngine.execute_query(query, limit: 5)
-        result2 = Mosaic.QueryEngine.execute_query(query, limit: 5)
-        assert elem(result1, 0) == elem(result2, 0)
-      end
-    end
-  end
+      results = assert_query_returns_results("Test sentence", level: :sentence, expand_context: false, min_similarity: 0.01)
+      assert hd(results).grounding == nil
 
-  describe "cache key generation (using Helpers module)" do
-    @tag :integration
-    test "different queries produce different cache behavior", %{skip: skip} do
-      if skip do
-        :ok
-      else
-        query1 = "unique_query_1_#{System.unique_integer()}"
-        query2 = "unique_query_2_#{System.unique_integer()}"
-        _ = Mosaic.QueryEngine.execute_query(query1, limit: 1)
-        _ = Mosaic.QueryEngine.execute_query(query2, limit: 1)
-        # We can't directly assert on cache keys here without mocking,
-        # but the query engine logic ensures different queries result in different cache interactions.
-        assert true
-      end
+      cleanup_conn(result.shard_path, conn)
     end
   end
 end
