@@ -99,8 +99,8 @@ print_banner() {
     echo -e "${BOLD}${CYAN}"
     cat << "EOF"
     ╔╦╗┌─┐┌─┐┌─┐┬┌─┐╔╦╗╔╗ 
-    ║║║│ │└─┐├─┤││  ║║╠╩╗
-    ╩ ╩└─┘└─┘┴ ┴┴└─┘═╩╝╚═╝
+    ║║║│ │└─┐├─┤││  ║ ║╠╩╗
+    ╩ ╩└─┘└─┘┴ ┴┴└─┘╚╩╝╚═╝
 EOF
     echo -e "${NC}"
     echo -e "${BOLD}Federated Semantic Search Engine${NC}"
