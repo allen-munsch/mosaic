@@ -147,7 +147,7 @@ semantic-fabric/
 - `SUCCESS_THRESHOLD`: Successes needed to close circuit
 - `CIRCUIT_TIMEOUT_MS`: Circuit breaker reset timeout
 
-## 📈 Performance Characteristics
+## 📈 Performance Characteristics ( Goals )
 
 ### Latency (50th/95th/99th percentile)
 - **Simple queries**: 50ms / 150ms / 300ms

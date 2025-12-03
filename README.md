@@ -199,20 +199,6 @@ mix run --no-halt
 
 ---
 
-# **Documentation**
-
-* `docs/ARCHITECTURE.md` — data flow, search paths, shard layout
-* `docs/DEPLOYMENT_GUIDE.md` — production deployment
-* `docs/SHARD_FORMAT.md` — SQLite schema, embeddings, ranking fields
-
----
-
-# **License**
-
-MIT
-
----
-
 # **Appendix: Demo Outputs**
 
 ```
@@ -716,3 +702,10 @@ Complex aggregations federated across shards...
 ```
 
 </details>
+
+
+---
+
+# **License**
+
+MIT
