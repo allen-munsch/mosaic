@@ -289,7 +289,7 @@ groups:
 
 - **Elixir OTP**: https://elixir-lang.org/getting-started/mix-otp/introduction-to-mix.html
 - **SQLite**: https://www.sqlite.org/docs.html
-- **Vector Search**: https://github.com/asg017/sqlite-vss
+- **Vector Search**: https://github.com/asg017/sqlite-vec
 - **Prometheus**: https://prometheus.io/docs/
 - **Docker Compose**: https://docs.docker.com/compose/
 
