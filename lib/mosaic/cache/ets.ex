@@ -95,25 +95,27 @@ defmodule Mosaic.Cache.ETS do
     {:reply, :ok, state}
   end
 
-  @impl true
-  def handle_call({:get_many, keys}, from, state) do
-    spawn_link(fn ->
-      results =
-        keys
-        |> Enum.map(fn key -> {key, GenServer.call(self(), {:get, key})} end)
-        |> Enum.filter(fn {_, result} -> match?({:ok, _}, result) end)
-        |> Enum.map(fn {key, {:ok, value}} -> {key, value} end)
-        |> Map.new()
-      GenServer.reply(from, results)
-    end)
-    {:noreply, state}
-  end
+ @impl true
+def handle_call({:get_many, keys}, _from, state) do
+  now = System.system_time(:second)
+  results = Enum.reduce(keys, %{}, fn key, acc ->
+    case :ets.lookup(state.table, key) do
+      [{^key, value, exp}] when exp == :infinity or exp > now -> Map.put(acc, key, value)
+      _ -> acc
+    end
+  end)
+  {:reply, results, state}
+end
 
-  @impl true
-  def handle_call({:put_many, entries, ttl}, _from, state) do
-    Enum.each(entries, fn {key, value} -> GenServer.call(self(), {:put, key, value, ttl}) end)
-    {:reply, :ok, state}
+ @impl true
+def handle_call({:put_many, entries, ttl}, _from, state) do
+  expires_at = case ttl do
+    :infinity -> :infinity
+    seconds -> System.system_time(:second) + seconds
   end
+  Enum.each(entries, fn {key, value} -> :ets.insert(state.table, {key, value, expires_at}) end)
+  {:reply, :ok, state}
+end
 
   @impl true
   def handle_info(:cleanup, state) do

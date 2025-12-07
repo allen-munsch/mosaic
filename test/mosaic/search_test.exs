@@ -1,34 +1,28 @@
 defmodule Mosaic.SearchTest do
-  use ExUnit.Case, async: false # Changed to async: false because Mox expects synchronous setup for global defaults
-  import Mox
+  use ExUnit.Case, async: false
+  import Mosaic.TestHelpers
 
-  setup :verify_on_exit!
-
-  test "perform_search/2 returns results for a valid query" do
-    expect(Mosaic.QueryEngineMock, :execute_query, fn "test query", _opts ->
-      {:ok, [%{id: 1, text: "Result from QueryEngine"}]}
-    end)
-
-    results = Mosaic.Search.perform_search("test query", query_engine: Mosaic.QueryEngineMock)
-    assert results == [%{id: 1, text: "Result from QueryEngine"}]
+  setup context do
+    {:ok, setup_context} = Mosaic.TestHelpers.setup_integration_test(context)
+    on_exit(setup_context.on_exit)
+    {result, conn} = index_and_connect("search_doc", "Document about Elixir programming and Phoenix framework.")
+    on_exit(fn -> cleanup_conn(result.shard_path, conn) end)
+    {:ok, Map.merge(setup_context, %{shard: result})}
   end
 
-  test "perform_search/2 returns empty list on query engine error" do
-    expect(Mosaic.QueryEngineMock, :execute_query, fn "error query", _opts ->
-      {:error, :something_went_wrong}
-    end)
+  test "perform_search returns results for matching query" do
+    results = Mosaic.Search.perform_search("Elixir", min_similarity: 0.01)
+    assert length(results) > 0
+    assert hd(results).text =~ "Elixir"
+  end
 
-    results = Mosaic.Search.perform_search("error query", query_engine: Mosaic.QueryEngineMock)
+  test "perform_search returns empty for non-matching query" do
+    results = Mosaic.Search.perform_search("xyz_nonexistent_term_123", min_similarity: 0.9)
     assert results == []
   end
 
-  test "perform_search/2 passes options to query engine" do
-    opts_to_pass = [limit: 10, skip_cache: true]
-    expect(Mosaic.QueryEngineMock, :execute_query, fn "query with opts", ^opts_to_pass ->
-      {:ok, [%{id: 2, text: "Result with opts"}]}
-    end)
-
-    results = Mosaic.Search.perform_search("query with opts", Keyword.merge(opts_to_pass, query_engine: Mosaic.QueryEngineMock))
-    assert results == [%{id: 2, text: "Result with opts"}]
+  test "perform_search respects limit option" do
+    results = Mosaic.Search.perform_search("Elixir", limit: 1, min_similarity: 0.01)
+    assert length(results) == 1
   end
 end

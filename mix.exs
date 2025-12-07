@@ -8,7 +8,9 @@ defmodule Mosaic.MixProject do
       elixir: "~> 1.19.3",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      releases: releases()
+      releases: releases(),
+      test_paths: ["test"],
+      test_pattern: "*_test.exs"
     ]
   end
 

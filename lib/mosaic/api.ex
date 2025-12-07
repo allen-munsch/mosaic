@@ -2,21 +2,24 @@ defmodule Mosaic.API do
   use Plug.Router
   require Logger
 
-  plug :parse_body
-  plug Plug.Logger
-  plug :match
-  plug :dispatch
+  plug(:parse_body)
+  plug(Plug.Logger)
+  plug(:match)
+  plug(:dispatch)
 
   def start_link(opts) do
     Plug.Cowboy.child_spec(scheme: :http, plug: __MODULE__, options: opts)
   end
 
   defp parse_body(conn, _opts) do
-    Plug.Parsers.call(conn, Plug.Parsers.init(
-      parsers: [:json],
-      pass: ["application/json"],
-      json_decoder: Jason
-    ))
+    Plug.Parsers.call(
+      conn,
+      Plug.Parsers.init(
+        parsers: [:json],
+        pass: ["application/json"],
+        json_decoder: Jason
+      )
+    )
   rescue
     Plug.Parsers.ParseError ->
       conn |> json_error(400, "Invalid JSON") |> halt()
@@ -31,8 +34,43 @@ defmodule Mosaic.API do
   post "/api/search" do
     with {:ok, query} <- require_param(conn.body_params, "query") do
       opts = extract_search_opts(conn.body_params)
-      results = Mosaic.QueryRouter.execute(query, [], Keyword.put(opts, :force_engine, :vector_search))
+
+      results =
+        Mosaic.QueryRouter.execute(query, [], Keyword.put(opts, :force_engine, :vector_search))
+
       json_ok(conn, %{results: results, path: "hot"})
+    else
+      {:error, msg} -> json_error(conn, 400, msg)
+    end
+  end
+
+  post "/api/search/grounded" do
+    with {:ok, query} <- require_param(conn.body_params, "query") do
+      level = Map.get(conn.body_params, "level", "paragraph") |> String.to_atom()
+
+      opts =
+        extract_search_opts(conn.body_params)
+        |> Keyword.put(:level, level)
+        |> Keyword.put(:expand_context, true)
+
+      case Mosaic.QueryEngine.execute_query(query, opts) do
+        {:ok, results} ->
+          formatted =
+            Enum.map(results, fn r ->
+              %{
+                id: r.id,
+                doc_id: r.doc_id,
+                text: r.text,
+                similarity: r.similarity,
+                grounding: format_grounding(r.grounding)
+              }
+            end)
+
+          json_ok(conn, %{results: formatted, level: level})
+
+        {:error, reason} ->
+          json_error(conn, 500, inspect(reason))
+      end
     else
       {:error, msg} -> json_error(conn, 400, msg)
     end
@@ -85,6 +123,7 @@ defmodule Mosaic.API do
     case conn.body_params do
       %{"text" => text, "id" => id} ->
         metadata = Map.get(conn.body_params, "metadata", %{})
+
         case Mosaic.Indexer.index_document(id, text, metadata) do
           {:ok, result} -> json_ok(conn, 201, %{id: result.id, status: result.status})
           {:error, :queue_full} -> json_error(conn, 503, "Server busy, try again")
@@ -92,6 +131,7 @@ defmodule Mosaic.API do
 
       %{"documents" => docs} when is_list(docs) ->
         documents = Enum.map(docs, fn d -> {d["id"], d["text"], Map.get(d, "metadata", %{})} end)
+
         case Mosaic.Indexer.index_documents(documents) do
           {:ok, result} -> json_ok(conn, 201, result)
           {:error, reason} -> json_error(conn, 500, inspect(reason))
@@ -103,15 +143,25 @@ defmodule Mosaic.API do
   end
 
   get "/api/shards" do
-    shards = Mosaic.ShardRouter.list_all_shards()
-    |> Enum.map(fn shard ->
-      shard
-      |> Map.drop([:centroid, :centroid_norm])
-      |> Map.take([:id, :path, :doc_count, :query_count])
-    end)
+    shards =
+      Mosaic.ShardRouter.list_all_shards()
+      |> Enum.map(fn shard ->
+        shard
+        |> Map.drop([:centroid, :centroid_norm])
+        |> Map.take([:id, :path, :doc_count, :query_count])
+      end)
+
     json_ok(conn, %{shards: shards, count: length(shards)})
   end
 
+  delete "/api/documents/:id" do
+    doc_id = conn.path_params["id"]
+
+    case Mosaic.Indexer.delete_document(doc_id) do
+      :ok -> json_ok(conn, %{status: "deleted", id: doc_id})
+      _ -> json_error(conn, 500, "Failed to delete document: #{doc_id}")
+    end
+  end
 
   post "/api/admin/refresh-duckdb" do
     Mosaic.DuckDBBridge.refresh_shards()
@@ -130,6 +180,7 @@ defmodule Mosaic.API do
       shard_count: length(Mosaic.ShardRouter.list_all_shards()),
       duckdb_shards: length(Mosaic.DuckDBBridge.attached_shards())
     }
+
     json_ok(conn, metrics)
   end
 
@@ -168,6 +219,7 @@ defmodule Mosaic.API do
   defp parse_float(v) when is_binary(v), do: String.to_float(v)
 
   defp json_ok(conn, body), do: json_ok(conn, 200, body)
+
   defp json_ok(conn, status, body) do
     conn
     |> put_resp_content_type("application/json")
@@ -178,5 +230,17 @@ defmodule Mosaic.API do
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(status, Jason.encode!(%{error: message}))
+  end
+
+  defp format_grounding(nil), do: nil
+
+  defp format_grounding(%Mosaic.Grounding.Reference{} = ref) do
+    %{
+      doc_id: ref.doc_id,
+      citation: Mosaic.Grounding.Reference.to_citation(ref),
+      start_offset: ref.start_offset,
+      end_offset: ref.end_offset,
+      parent_context: ref.parent_context
+    }
   end
 end

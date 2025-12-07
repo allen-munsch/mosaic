@@ -328,7 +328,7 @@ Shard File: /data/shards/A7/3F/21/shard.db
 │  ┌────────────────────────────────────────────┐│
 │  │ vss_documents (Virtual Table)               ││
 │  │  - Vector index for fast similarity search ││
-│  │  - Uses sqlite-vss extension                ││
+│  │  - Uses sqlite-vec extension                ││
 │  │  - Supports vss_search() and vss_distance() ││
 │  └────────────────────────────────────────────┘│
 │                                                  │
@@ -486,7 +486,7 @@ Network:  ██████░░░░░░░░░░ 30%
 | **Type** | RDBMS + extension | Library | Vector DB | Managed service | Vector DB | Distributed search engine |
 | **Architecture** | Single node (+ replicas) | In-memory indexes | Rust-based, distributed | Fully managed cloud | Go-based, modular | SQLite shards + Elixir coordination |
 | **Primary Language** | C / SQL | C++ / Python | Rust | N/A (API only) | Go | Elixir |
-| **Vector Index Types** | IVFFlat, HNSW | IVF, HNSW, PQ, flat | HNSW | Proprietary | HNSW | sqlite-vss (Faiss-based) |
+| **Vector Index Types** | IVFFlat, HNSW | IVF, HNSW, PQ, flat | HNSW | Proprietary | HNSW | sqlite-vec (Faiss-based) |
 | **Max Vectors (practical)** | ~10M | 1B+ (with sharding) | 100M+ | "Unlimited" (paid) | 100M+ | Goal Unlimited |
 | **Hybrid Search** | Full SQL + vectors | No (vectors only) | Filters + vectors | Metadata filters | BM25 + vectors | SQL + vectors + PageRank |
 | **ACID Transactions** | Full | None | Limited | None | None | Per-shard only |

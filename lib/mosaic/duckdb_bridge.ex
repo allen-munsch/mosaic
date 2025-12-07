@@ -87,46 +87,37 @@ defmodule Mosaic.DuckDBBridge do
   end
 
   defp execute_federated(sql, params, conn) do
+  table_match = Regex.run(~r/FROM\s+(documents|chunks)\b/i, sql)
+  if table_match do
     shards = list_current_shards()
     if Enum.empty?(shards) do
       {:ok, []}
     else
-      federated_sql = rewrite_to_federated(sql, shards)
+      table = Enum.at(table_match, 1)
+      federated_sql = rewrite_to_federated(sql, shards, table)
       case Duckdbex.query(conn, federated_sql, params) do
-        {:ok, result} ->
-          rows = Duckdbex.fetch_all(result)
-          {:ok, rows}
+        {:ok, result} -> {:ok, Duckdbex.fetch_all(result)}
         {:error, err} -> {:error, err}
       end
     end
-  end
-
-  defp rewrite_to_federated(sql, shards) do
-    if Regex.match?(~r/FROM\s+documents\b/i, sql) do
-      shard_queries = shards
-      |> Enum.map(fn shard ->
-        # Use sqlite_scan() to bypass schema introspection
-        sql
-        |> String.replace(~r/FROM\s+documents\b/i, "FROM sqlite_scan('#{shard.path}', 'documents')")
-        |> String.replace(~r/ORDER\s+BY\s+[^;]+?(LIMIT|$)/i, "\\1")
-        |> String.replace(~r/LIMIT\s+\d+/i, "")
-        |> String.trim()
-      end)
-      |> Enum.join("\nUNION ALL\n")
-
-      order_clause = case Regex.run(~r/(ORDER\s+BY\s+[^;]+?)(?=LIMIT|$)/i, sql) do
-        [_, clause] -> clause
-        nil -> ""
-      end
-
-      limit_clause = case Regex.run(~r/(LIMIT\s+\d+)/i, sql) do
-        [_, clause] -> clause
-        nil -> ""
-      end
-
-      "WITH federated AS (#{shard_queries}) SELECT * FROM federated #{order_clause} #{limit_clause}"
-    else
-      sql
+  else
+    case Duckdbex.query(conn, sql, params) do
+      {:ok, result} -> {:ok, Duckdbex.fetch_all(result)}
+      {:error, err} -> {:error, err}
     end
   end
+end
+
+defp rewrite_to_federated(sql, shards, table) do
+  shard_queries = Enum.map(shards, fn shard ->
+    sql
+    |> String.replace(~r/FROM\s+#{table}\b/i, "FROM sqlite_scan('#{shard.path}', '#{table}')")
+    |> String.replace(~r/ORDER\s+BY\s+[^;]+?(LIMIT|$)/i, "\\1")
+    |> String.replace(~r/LIMIT\s+\d+/i, "")
+    |> String.trim()
+  end) |> Enum.join("\nUNION ALL\n")
+  order_clause = case Regex.run(~r/(ORDER\s+BY\s+[^;]+?)(?=LIMIT|$)/i, sql), do: ([_, c] -> c; nil -> "")
+  limit_clause = case Regex.run(~r/(LIMIT\s+\d+)/i, sql), do: ([_, c] -> c; nil -> "")
+  "WITH federated AS (#{shard_queries}) SELECT * FROM federated #{order_clause} #{limit_clause}"
+end
 end

@@ -147,7 +147,7 @@ semantic-fabric/
 - `SUCCESS_THRESHOLD`: Successes needed to close circuit
 - `CIRCUIT_TIMEOUT_MS`: Circuit breaker reset timeout
 
-## 📈 Performance Characteristics
+## 📈 Performance Characteristics ( Goals )
 
 ### Latency (50th/95th/99th percentile)
 - **Simple queries**: 50ms / 150ms / 300ms
@@ -289,7 +289,7 @@ groups:
 
 - **Elixir OTP**: https://elixir-lang.org/getting-started/mix-otp/introduction-to-mix.html
 - **SQLite**: https://www.sqlite.org/docs.html
-- **Vector Search**: https://github.com/asg017/sqlite-vss
+- **Vector Search**: https://github.com/asg017/sqlite-vec
 - **Prometheus**: https://prometheus.io/docs/
 - **Docker Compose**: https://docs.docker.com/compose/
 
