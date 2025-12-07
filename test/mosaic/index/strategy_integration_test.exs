@@ -18,7 +18,7 @@ defmodule Mosaic.Index.StrategyIntegrationTest do
       case text do
         "hello world" -> [0.1, 0.2, 0.3, 0.4]
         "elixir rocks" -> [0.4, 0.3, 0.2, 0.1]
-        "gemini ai" -> [0.2, 0.3, 0.1, 0.4]
+        "acme ai" -> [0.2, 0.3, 0.1, 0.4]
         _ -> List.duplicate(0.0, 4)
       end
     end)
@@ -28,7 +28,7 @@ defmodule Mosaic.Index.StrategyIntegrationTest do
         case text do
           "hello world" -> [0.1, 0.2, 0.3, 0.4]
           "elixir rocks" -> [0.4, 0.3, 0.2, 0.1]
-          "gemini ai" -> [0.2, 0.3, 0.1, 0.4]
+          "acme ai" -> [0.2, 0.3, 0.1, 0.4]
           _ -> List.duplicate(0.0, 4)
         end
       end)
@@ -82,11 +82,11 @@ defmodule Mosaic.Index.StrategyIntegrationTest do
     )
 
     # Index some documents
-    QueryEngine.handle_call({:execute_query, "gemini ai", [action: :index, id: "doc3", text: "gemini ai"]}, self(), QueryEngine.state())
+    QueryEngine.handle_call({:execute_query, "acme ai", [action: :index, id: "doc3", text: "acme ai"]}, self(), QueryEngine.state())
     QueryEngine.handle_call({:execute_query, "elixir rocks", [action: :index, id: "doc4", text: "elixir rocks"]}, self(), QueryEngine.state())
 
-    # Query for "gemini ai"
-    {:reply, {:ok, results}, _} = QueryEngine.handle_call({:execute_query, "gemini ai", []}, self(), QueryEngine.state())
+    # Query for "acme ai"
+    {:reply, {:ok, results}, _} = QueryEngine.handle_call({:execute_query, "acme ai", []}, self(), QueryEngine.state())
 
     assert length(results) >= 1 # Quantized might return more or less based on binning
     assert Enum.any?(results, fn r -> r.id == "doc3" end)
