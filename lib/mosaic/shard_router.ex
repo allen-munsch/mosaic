@@ -1,6 +1,7 @@
 defmodule Mosaic.ShardRouter do
   use GenServer
   require Logger
+  @behaviour Mosaic.Index.Router # Implement the new router behaviour
 
   defmodule State do
     defstruct [
@@ -18,6 +19,7 @@ defmodule Mosaic.ShardRouter do
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
+  @impl true
   def init(_opts) do
     routing_db_path = Mosaic.Config.get(:routing_db_path)
     max_size = Mosaic.Config.get(:routing_cache_max_size)
@@ -102,8 +104,30 @@ defmodule Mosaic.ShardRouter do
     )
   end
 
-  def find_similar_shards(query_vector, limit, opts \\ []),
-    do: GenServer.call(__MODULE__, {:find_similar, query_vector, limit, opts}, 30_000)
+  # Public API for Strategies
+  def find_similar_shards_sync(query_vector, limit, opts \\ []),
+    do: GenServer.call(__MODULE__, {:do_find_similar, query_vector, limit, opts}, 30_000)
+  
+  def route_insert_to_shard(embedding),
+    do: GenServer.call(__MODULE__, {:route_insert, embedding})
+
+  @impl true
+  def route_query(query_embedding, opts) do
+    {:ok, find_similar_shards_sync(query_embedding, Keyword.get(opts, :limit, Mosaic.Config.get(:default_shard_limit)), opts)}
+  end
+
+  @impl true
+  def route_insert(embedding) do
+    # For centroid strategy, this might return the active shard for insertion
+    # For now, return a dummy path or delegate to a helper
+    {:ok, "path/to/shard.db"}
+  end
+
+  @impl true
+  def rebalance(opts) do
+    Logger.info("Rebalancing shards (Centroid strategy): #{inspect(opts)}")
+    :ok
+  end
 
   def reset_state(), do: GenServer.call(__MODULE__, :reset_state)
   def get_cache_state(), do: GenServer.call(__MODULE__, :get_cache_state)
@@ -114,15 +138,16 @@ defmodule Mosaic.ShardRouter do
 
   def register_shard(shard_info), do: GenServer.call(__MODULE__, {:register_shard, shard_info})
   def list_all_shards, do: GenServer.call(__MODULE__, :list_all_shards)
+  def list_all_shard_paths, do: GenServer.call(__MODULE__, :list_all_shard_paths)
 
   def handle_call(:get_routing_conn, _from, state) do
     {:reply, state.routing_conn, state}
   end
 
-  def handle_call({:find_similar, query_vector, limit, opts}, _from, state) do
+  def handle_call({:do_find_similar, query_vector, limit, opts}, _from, state) do
     {shards, cache_hit} =
       Mosaic.WorkerPool.transaction(:router_pool, fn worker ->
-        GenServer.call(worker, {:find_similar, query_vector, limit, opts, state})
+        GenServer.call(worker, {:do_find_similar, query_vector, limit, opts, state})
       end)
 
     new_state =
@@ -131,7 +156,7 @@ defmodule Mosaic.ShardRouter do
         else: %{state | cache_misses: state.cache_misses + 1}
 
     final_state = update_access_stats(shards, new_state)
-    {:reply, {:ok, shards}, final_state}
+    {:reply, shards, final_state}
   end
 
   def handle_call(:reset_state, _from, state) do
@@ -178,6 +203,12 @@ defmodule Mosaic.ShardRouter do
     {:reply, shards, state}
   end
 
+  def handle_call(:list_all_shard_paths, _from, state) do
+    {:ok, rows} = Mosaic.DB.query(state.routing_conn, "SELECT path FROM shard_metadata WHERE status = 'active'", [])
+    paths = Enum.map(rows, fn [path] -> path end)
+    {:reply, paths, state}
+  end
+
   def handle_call(:get_cache_state, _from, state) do
     cache_keys = :ets.tab2list(state.cache_table) |> Enum.map(fn {id, _} -> id end) |> Enum.sort()
     access_list = :ets.tab2list(state.access_table) |> Enum.sort()
@@ -187,14 +218,14 @@ defmodule Mosaic.ShardRouter do
   def handle_call({:register_shard, shard_info}, _from, state) do
     # Insert into routing DB
     Mosaic.DB.execute(state.routing_conn, """
-      INSERT OR REPLACE INTO shard_metadata (id, path, doc_count)
-      VALUES (?, ?, ?)
-    """, [shard_info.id, shard_info.path, shard_info.doc_count])
+      INSERT OR REPLACE INTO shard_metadata (id, path, doc_count, bloom_filter)
+      VALUES (?, ?, ?, ?)
+    """, [shard_info.id, shard_info.path, shard_info.doc_count, :erlang.term_to_binary(shard_info.bloom_filter)])
 
     # Insert centroids for each level
     Enum.each(shard_info.centroids, fn {level, centroid} ->
       blob = :erlang.term_to_binary(centroid)
-      norm = :math.sqrt(Enum.sum(Enum.map(centroid, &(&1 * &1))))
+      norm = Mosaic.VectorMath.norm(centroid)
       Mosaic.DB.execute(state.routing_conn, """
         INSERT OR REPLACE INTO shard_centroids (shard_id, level, centroid, centroid_norm)
         VALUES (?, ?, ?, ?)
@@ -207,8 +238,30 @@ defmodule Mosaic.ShardRouter do
     {:reply, :ok, state}
   end
 
+  def handle_call({:route_insert, _embedding}, _from, state) do
+    # This is a placeholder for actual routing logic that determines which shard to insert into.
+    # For the centroid strategy, it might return the currently active shard.
+    # For now, it simply finds the least full active shard.
+    active_shards = list_all_shards_from_db(state.routing_conn)
+    case Enum.min_by(active_shards, & &1.doc_count, fn -> nil end) do
+      nil ->
+        {:error, :no_active_shards}
+      shard ->
+        {:ok, shard.path}
+    end
+  end
+
+  defp list_all_shards_from_db(conn) do
+    case Mosaic.DB.query(conn, "SELECT id, path, doc_count FROM shard_metadata WHERE status = 'active'", []) do
+      {:ok, rows} ->
+        Enum.map(rows, fn [id, path, doc_count] -> %{id: id, path: path, doc_count: doc_count} end)
+      {:error, _} ->
+        []
+    end
+  end
+
   def handle_cast({:update_centroid, shard_id, centroid}, state) do
-    centroid_norm = VectorMath.norm(centroid)
+    centroid_norm = Mosaic.VectorMath.norm(centroid)
     centroid_blob = :erlang.term_to_binary(centroid)
 
     Mosaic.DB.execute(
@@ -218,7 +271,7 @@ defmodule Mosaic.ShardRouter do
     )
 
     case :ets.lookup(state.cache_table, shard_id) do
-      [{^shard_id, cached_shard}] ->
+      [{_, cached_shard}] ->
         updated_shard = %{cached_shard | centroid: centroid_blob, centroid_norm: centroid_norm}
         :ets.insert(state.cache_table, {shard_id, updated_shard})
 
@@ -233,7 +286,7 @@ defmodule Mosaic.ShardRouter do
   def do_find_similar(query_vector, limit, opts, current_state) do
     min_similarity = Keyword.get(opts, :min_similarity, Mosaic.Config.get(:min_similarity))
     level = Keyword.get(opts, :level, :paragraph)
-    vector_math_impl = Keyword.get(opts, :vector_math_impl, VectorMath)
+    vector_math_impl = Keyword.get(opts, :vector_math_impl, Mosaic.VectorMath)
     query_terms = Keyword.get(opts, :query_terms, [])
 
     candidates = fetch_shards_for_level(current_state.routing_conn, level)
@@ -245,7 +298,7 @@ defmodule Mosaic.ShardRouter do
         Enum.filter(candidates, fn shard ->
           case Map.get(current_state.bloom_filters, shard.id) do
             nil -> true
-            bloom -> Enum.any?(query_terms, &BloomFilter.member?(bloom, String.downcase(&1)))
+            bloom -> Enum.any?(query_terms, &Mosaic.BloomFilter.member?(bloom, String.downcase(&1)))
           end
         end)
       end
@@ -328,7 +381,7 @@ defmodule Mosaic.ShardRouter do
          ) do
       {:ok, rows} ->
         rows
-        |> Enum.map(fn [id, bloom_blob] -> {id, BloomFilter.from_binary(bloom_blob)} end)
+        |> Enum.map(fn [id, bloom_blob] -> {id, :erlang.binary_to_term(bloom_blob)} end)
         |> Map.new()
 
       {:error, err} ->

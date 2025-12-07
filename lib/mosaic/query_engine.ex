@@ -14,7 +14,11 @@ defmodule Mosaic.QueryEngine do
     :ranker,
     :cache_ttl,
     # Name of the cache process
-    :cache_name
+    :cache_name,
+    # Index strategy module
+    :index_strategy,
+    # State managed by the index strategy
+    :index_state
   ]
 
   def invalidate_cache(shard_id) do
@@ -39,11 +43,21 @@ defmodule Mosaic.QueryEngine do
     cache_ttl = Keyword.get(opts, :cache_ttl, 300)
     ranker = Keyword.get(opts, :ranker, Ranker.new())
 
+    strategy_module = Keyword.get(opts, :index_strategy, "centroid")
+    index_strategy = case strategy_module do
+      "quantized" -> Mosaic.Index.Strategy.Quantized
+      _ -> Mosaic.Index.Strategy.Centroid
+    end
+
+    {:ok, index_state} = index_strategy.init(opts)
+
     state = %__MODULE__{
       cache: cache_impl,
       ranker: ranker,
       cache_ttl: cache_ttl,
-      cache_name: cache_name
+      cache_name: cache_name,
+      index_strategy: index_strategy,
+      index_state: index_state
     }
 
     {:ok, state}
@@ -84,23 +98,24 @@ defmodule Mosaic.QueryEngine do
           execute_search_and_cache(query_text, opts, ranker, cache_key, limit, state)
       end
     else
-      execute_search_without_cache(query_text, opts, ranker, limit)
+      execute_search_without_cache(query_text, opts, ranker, limit, state)
     end
   end
 
   defp execute_search_and_cache(query_text, opts, ranker, cache_key, limit, state) do
-    case execute_search_without_cache(query_text, opts, ranker, limit) do
+    case execute_search_without_cache(query_text, opts, ranker, limit, state) do
       {:ok, results} = success ->
         # Pass cache_name to cache
         state.cache.put(cache_key, results, state.cache_ttl, state.cache_name)
         success
+
 
       error ->
         error
     end
   end
 
-  defp execute_search_without_cache(query_text, opts, ranker, limit) do
+  defp execute_search_without_cache(query_text, opts, ranker, limit, state) do
     query_embedding = Mosaic.EmbeddingService.encode(query_text)
     query_terms = Helpers.extract_terms(query_text)
 
@@ -115,20 +130,18 @@ defmodule Mosaic.QueryEngine do
       level: level
     }
 
-    shard_limit = Keyword.get(opts, :shard_limit, Mosaic.Config.get(:default_shard_limit))
-
-    case Mosaic.ShardRouter.find_similar_shards(
+    # Use the configured index strategy to find candidates
+    case state.index_strategy.find_candidates(
            query_embedding,
-           shard_limit,
-           Keyword.merge(opts, level: level, query_terms: query_terms)
+           Keyword.merge(opts, level: level, query_terms: query_terms),
+           state.index_state
          ) do
-      {:ok, shards} ->
-        candidates = retrieve_chunks_from_shards(shards, query_embedding, level, limit * 3)
+      {:ok, candidates} ->
         ranked = Ranker.rank(candidates, context, ranker)
         results = ranked |> Enum.take(limit) |> deduplicate_results()
 
         if expand_context do
-          {:ok, expand_with_grounding(results, shards)}
+          {:ok, expand_with_grounding(results, [])} # Shards are not relevant in this context anymore for grounding
         else
           {:ok, Enum.map(results, &Map.put(&1, :grounding, nil))}
         end
@@ -138,109 +151,61 @@ defmodule Mosaic.QueryEngine do
     end
   end
 
-  defp retrieve_chunks_from_shards(shards, query_embedding, level, limit) do
-    shards
-    |> Task.async_stream(
-      fn shard ->
-        search_shard_chunks(shard, query_embedding, level, limit)
-      end, ordered: false, timeout: 10_000)
-    |> Enum.flat_map(fn
-      {:ok, {:ok, results}} -> results
-      {:ok, results} when is_list(results) -> results
-      _ -> []
-    end)
-  end
 
-  defp search_shard_chunks(shard, query_embedding, level, limit) do
-    case Mosaic.ConnectionPool.checkout(shard.path) do
-      {:ok, conn} ->
-        results = do_chunk_vector_search(conn, query_embedding, level, limit)
-        Mosaic.ConnectionPool.checkin(shard.path, conn)
-        {:ok, Enum.map(results, &Map.put(&1, :shard_id, shard.id))}
-
-      error ->
-        Logger.warning("Failed to search shard #{shard.id}: #{inspect(error)}")
-        {:error, []}
-    end
-  end
-
-  defp do_chunk_vector_search(conn, query_embedding, level, limit) do
-    vector_json = Jason.encode!(query_embedding)
-
-    sql = """
-      SELECT c.id, c.doc_id, c.parent_id, c.level, c.text, c.start_offset, c.end_offset, c.pagerank, d.created_at, d.metadata, vec_distance_cosine(vc.embedding, ?) as distance
-      FROM chunks c
-      JOIN vec_chunks vc ON c.id = vc.id
-      JOIN documents d ON c.doc_id = d.id
-      WHERE c.level = ?
-      ORDER BY distance ASC
-      LIMIT ?
-    """
-
-    case Mosaic.DB.query(conn, sql, [vector_json, Atom.to_string(level), limit]) do
-      {:ok, rows} ->
-        Enum.map(rows, fn [
-                            id,
-                            doc_id,
-                            parent_id,
-                            level_str,
-                            text,
-                            start_off,
-                            end_off,
-                            pagerank,
-                            created_at,
-                            metadata,
-                            distance
-                          ] ->
-          %{
-            id: id,
-            doc_id: doc_id,
-            parent_id: parent_id,
-            level: String.to_atom(level_str),
-            text: text,
-            start_offset: start_off,
-            end_offset: end_off,
-            pagerank: pagerank || 0.0,
-            created_at: Helpers.parse_datetime(created_at),
-            metadata: Helpers.safe_decode(metadata),
-            similarity: Helpers.distance_to_similarity(distance)
-          }
-        end)
-
-      {:error, err} ->
-        Logger.error("Chunk vector search error: #{inspect(err)}")
-        []
-    end
-  end
-  defp expand_with_grounding(results, shards) do
+  defp expand_with_grounding(results, state) do
     Enum.map(results, fn result ->
-      shard = Enum.find(shards, &(&1.id == result.shard_id))
-      Logger.debug("Grounding lookup: shard_id=#{result.shard_id}, found=#{shard != nil}")
-      grounding = if shard, do: fetch_grounding(result, shard), else: nil
+      grounding = fetch_grounding(result, state)
       Map.put(result, :grounding, grounding)
     end)
   end
 
-  defp fetch_grounding(result, shard) do
-    case Mosaic.ConnectionPool.checkout(shard.path) do
-      {:ok, conn} ->
-        doc_text = fetch_doc_text(conn, result.doc_id)
-        parent_context = fetch_parent_context(conn, result.parent_id)
-        Mosaic.ConnectionPool.checkin(shard.path, conn)
+  defp fetch_grounding(result, state) do
+    case state.index_strategy do
+      Mosaic.Index.Strategy.Centroid ->
+        shard_id = result.shard_id
+        case Mosaic.ShardRouter.list_all_shards() do
+          shards ->
+            shard = Enum.find(shards, &(&1.id == shard_id))
+            if shard do
+              case Mosaic.ConnectionPool.checkout(shard.path) do
+                {:ok, conn} ->
+                  doc_text = fetch_doc_text(conn, result.doc_id)
+                  parent_context = fetch_parent_context(conn, result.parent_id)
+                  Mosaic.ConnectionPool.checkin(shard.path, conn)
 
+                  %Reference{
+                    chunk_id: result.id,
+                    doc_id: result.doc_id,
+                    doc_text: doc_text,
+                    chunk_text: result.text,
+                    start_offset: result.start_offset,
+                    end_offset: result.end_offset,
+                    parent_context: parent_context,
+                    level: result.level
+                  }
+                _ -> nil
+              end
+            else
+              nil
+            end
+        end
+      Mosaic.Index.Strategy.Quantized ->
+        # For quantized strategy, `result` should contain `cell_path`
+        # and `doc_id` directly, as text is not stored in cell.
+        # Grounding would involve looking up the original document if needed.
+        # For now, return a simplified grounding based on metadata.
+        # A full implementation would need a mechanism to retrieve original document text.
         %Reference{
           chunk_id: result.id,
-          doc_id: result.doc_id,
-          doc_text: doc_text,
-          chunk_text: result.text,
-          start_offset: result.start_offset,
-          end_offset: result.end_offset,
-          parent_context: parent_context,
-          level: result.level
+          doc_id: result.id, # In quantized, doc_id is chunk_id
+          doc_text: "Text not available in quantized cell for grounding directly.",
+          chunk_text: result.metadata["text"] || "Text not available.",
+          start_offset: 0,
+          end_offset: 0,
+          parent_context: nil,
+          level: :document # Assuming document level for quantized cells
         }
-
-      _ ->
-        nil
+      _ -> nil
     end
   end
 

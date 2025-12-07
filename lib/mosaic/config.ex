@@ -42,7 +42,12 @@ defmodule Mosaic.Config do
     weight_freshness: 0.1,
     weight_text_match: 0.1,
     fusion_strategy: "weighted_sum",
-    min_score: 0.0
+    min_score: 0.0,
+    index_strategy: "centroid",  # or "quantized"
+    quantized_bins: 16,
+    quantized_dims_per_level: 8,
+    quantized_cell_capacity: 10_000,
+    quantized_search_radius: 1
   }
 
   def get(key, default \\ nil) do

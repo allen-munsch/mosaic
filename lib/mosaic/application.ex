@@ -26,9 +26,11 @@ defmodule Mosaic.Application do
       cache_child_spec(),
 
       # Shard routing
-      {Mosaic.ShardRouter, []},
-      {Mosaic.BloomFilterManager, []},
-      {Mosaic.RoutingMaintenance, []},
+      # {Mosaic.ShardRouter, []}, # Replaced by the chosen index strategy
+      # {Mosaic.BloomFilterManager, []}, # These are now managed by the strategy
+      # {Mosaic.RoutingMaintenance, []}, # These are now managed by the strategy
+
+      index_strategy_child_spec(),
 
       # Embeddings
       {Nx.Serving,
@@ -39,14 +41,17 @@ defmodule Mosaic.Application do
       {Mosaic.EmbeddingCache, []},
 
       # Indexer (manages active shard for document ingestion)
-      {Mosaic.Indexer, []},
+      # Handled by the selected index strategy now.
+      # {Mosaic.Indexer, []},
 
       # HOT PATH: Query engine (SQLite + sqlite-vec)
       {Mosaic.QueryEngine, [
         cache: cache_module(),
         cache_ttl: Mosaic.Config.get(:query_cache_ttl_seconds),
-        ranker: Mosaic.Ranking.Ranker.new(ranker_config())
+        ranker: Mosaic.Ranking.Ranker.new(ranker_config()),
+        index_strategy: Mosaic.Config.get(:index_strategy)
       ]},
+
 
       # WARM PATH: Analytics engine (DuckDB)
       {Mosaic.DuckDBBridge, []},
@@ -133,6 +138,15 @@ defmodule Mosaic.Application do
         secret: System.get_env("CLUSTER_SECRET", "mosaic-secret")
       ]
     ]]]
+  end
+
+  defp index_strategy_child_spec do
+    strategy_module = case Mosaic.Config.get(:index_strategy) do
+      "quantized" -> Mosaic.Index.Strategy.Quantized
+      _ -> Mosaic.Index.Strategy.Centroid
+    end
+    
+    {Mosaic.Index.Supervisor, strategy: strategy_module}
   end
 
   defp port, do: System.get_env("PORT", "4040") |> String.to_integer()
