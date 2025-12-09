@@ -47,7 +47,21 @@ defmodule Mosaic.Config do
     quantized_bins: 16,
     quantized_dims_per_level: 8,
     quantized_cell_capacity: 10_000,
-    quantized_search_radius: 1
+    quantized_search_radius: 1,
+    # HNSW config
+    hnsw_m: 16,
+    hnsw_ef_construction: 200,
+    hnsw_ef_search: 50,
+    hnsw_distance_fn: :cosine,
+    # Binary/XOR config
+    binary_bits: 256,
+    binary_quantization: :mean,
+    # IVF config
+    ivf_n_lists: 100,
+    ivf_n_probe: 10,
+    # PQ config
+    pq_m: 8,
+    pq_k_sub: 256
   }
 
   def get(key, default \\ nil) do

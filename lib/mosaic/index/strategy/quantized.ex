@@ -1,5 +1,6 @@
 defmodule Mosaic.Index.Strategy.Quantized do
   @behaviour Mosaic.Index.Strategy
+  require Logger
   
   alias Mosaic.Index.Quantized.{Cell, PathEncoder, CellRegistry}
   
@@ -30,7 +31,7 @@ defmodule Mosaic.Index.Strategy.Quantized do
   end
 
   @impl true
-  def delete_document(doc_id, state) do
+  def delete_document(_doc_id, _state) do
     # This is more complex for a quantized index as the doc could be in multiple cells
     # For now, we'll implement a basic version that assumes we know the cell path
     # or requires iterating through cells (which is not efficient).

@@ -18,7 +18,7 @@ defmodule Mosaic.Index.Migrator do
     Logger.info("Starting migration from #{inspect(source_strategy_module)} to #{inspect(target_strategy_module)}")
 
     # Initialize source and target strategies
-    {:ok, source_state} = source_strategy_module.init([])
+    {:ok, _source_state} = source_strategy_module.init([])
     {:ok, target_state} = target_strategy_module.init([])
 
     # This is a placeholder for "streaming all documents from source".
@@ -65,7 +65,7 @@ defmodule Mosaic.Index.Migrator do
   @doc """
   Performs verification after migration.
   """
-  def verify(source_strategy_module, target_strategy_module) do
+  def verify(_source_strategy_module, _target_strategy_module) do
     # Placeholder for verification logic
     # - Compare document counts
     # - Perform sample queries against both strategies and compare results

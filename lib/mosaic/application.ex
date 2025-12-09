@@ -141,13 +141,53 @@ defmodule Mosaic.Application do
   end
 
   defp index_strategy_child_spec do
-    strategy_module = case Mosaic.Config.get(:index_strategy) do
+    strategy_name = Mosaic.Config.get(:index_strategy, "centroid")
+    
+    strategy_module = case strategy_name do
+      "centroid" -> Mosaic.Index.Strategy.Centroid
       "quantized" -> Mosaic.Index.Strategy.Quantized
+      "hnsw" -> Mosaic.Index.Strategy.HNSW
+      "binary" -> Mosaic.Index.Strategy.Binary
+      "ivf" -> Mosaic.Index.Strategy.IVF
+      "pq" -> Mosaic.Index.Strategy.PQ
       _ -> Mosaic.Index.Strategy.Centroid
     end
     
-    {Mosaic.Index.Supervisor, strategy: strategy_module}
+    strategy_opts = get_strategy_opts(strategy_name)
+    {Mosaic.Index.Supervisor, [strategy: strategy_module, opts: strategy_opts]}
   end
+
+  defp get_strategy_opts("hnsw") do
+    [
+      m: Mosaic.Config.get(:hnsw_m),
+      ef_construction: Mosaic.Config.get(:hnsw_ef_construction),
+      ef_search: Mosaic.Config.get(:hnsw_ef_search),
+      distance_fn: Mosaic.Config.get(:hnsw_distance_fn)
+    ]
+  end
+
+  defp get_strategy_opts("binary") do
+    [
+      bits: Mosaic.Config.get(:binary_bits),
+      quantization: Mosaic.Config.get(:binary_quantization)
+    ]
+  end
+
+  defp get_strategy_opts("ivf") do
+    [
+      n_lists: Mosaic.Config.get(:ivf_n_lists),
+      n_probe: Mosaic.Config.get(:ivf_n_probe)
+    ]
+  end
+
+  defp get_strategy_opts("pq") do
+    [
+      m: Mosaic.Config.get(:pq_m),
+      k_sub: Mosaic.Config.get(:pq_k_sub)
+    ]
+  end
+
+  defp get_strategy_opts(_), do: []
 
   defp port, do: System.get_env("PORT", "4040") |> String.to_integer()
 end

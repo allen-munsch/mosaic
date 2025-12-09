@@ -27,7 +27,7 @@ defmodule Mosaic.HybridQuery do
 
   defp select_shards(embedding, opts) do
     shard_limit = Keyword.get(opts, :shard_limit, 10)
-    case Mosaic.ShardRouter.find_similar_shards(embedding, shard_limit, opts) do
+    case Mosaic.ShardRouter.find_similar_shards_sync(embedding, shard_limit, opts) do
       {:ok, shards} -> shards
       {:error, _} -> []
     end

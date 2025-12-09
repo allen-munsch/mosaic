@@ -38,8 +38,18 @@ defmodule Mosaic.Index.Strategy.Centroid do
     # embedding here is the document embedding, not chunk embeddings
     case Mosaic.Indexer.index_document(doc.id, doc.text, doc.metadata) do
       {:ok, _} -> {:ok, nil} # State is not used here for centroid
-      {:error, e} -> {:error, e}
+
     end
+  end
+
+  @impl true
+  def index_batch(docs, state) do
+    Enum.reduce_while(docs, {:ok, state}, fn {doc, embedding}, {:ok, acc_state} ->
+      case index_document(doc, embedding, acc_state) do
+        {:ok, new_state} -> {:cont, {:ok, new_state}}
+        error -> {:halt, error}
+      end
+    end)
   end
 
   @impl true
@@ -52,6 +62,21 @@ defmodule Mosaic.Index.Strategy.Centroid do
     # Placeholder for now, can delegate to existing stats if available
     # For centroid strategy, this could involve ShardRouter stats
     %{}
+  end
+
+  @impl true
+  def serialize(state) do
+    {:ok, :erlang.term_to_binary(state)}
+  end
+
+  @impl true
+  def deserialize(data, _opts) do
+    {:ok, :erlang.binary_to_term(data)}
+  end
+
+  @impl true
+  def optimize(state) do
+    {:ok, state}
   end
 
   # Helper functions moved from QueryEngine

@@ -46,7 +46,7 @@ defmodule Mosaic.HealthCheck do
     try do
       # Try a simple routing operation
       test_vector = List.duplicate(0.1, Mosaic.Config.get(:embedding_dim))
-      Mosaic.ShardRouter.find_similar_shards(test_vector, 1, use_cache: true)
+      Mosaic.ShardRouter.find_similar_shards_sync(test_vector, 1, [use_cache: true])
       {:router, :ok}
     rescue
       _ -> {:router, :failed}
