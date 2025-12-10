@@ -7,12 +7,12 @@ defmodule Mosaic.Index.StrategyFactory do
   """
 
   @strategies %{
-    centroid: Mosaic.Index.Strategy.Centroid,
-    quantized: Mosaic.Index.Strategy.Quantized,
-    hnsw: Mosaic.Index.Strategy.HNSW,
     binary: Mosaic.Index.Strategy.Binary,
+    centroid: Mosaic.Index.Strategy.Centroid,
+    hnsw: Mosaic.Index.Strategy.HNSW,
     ivf: Mosaic.Index.Strategy.IVF,
-    pq: Mosaic.Index.Strategy.PQ
+    pq: Mosaic.Index.Strategy.PQ,
+    quantized: Mosaic.Index.Strategy.Quantized,
   }
 
   @doc "List all available strategies"

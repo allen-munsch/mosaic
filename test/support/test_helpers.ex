@@ -24,8 +24,9 @@ defmodule Mosaic.TestHelpers do
   end
 
   @doc "Index document and return connection for direct verification"
-  def index_and_connect(doc_id, text, metadata \\ %{}) do
-    {:ok, result} = Mosaic.Indexer.index_document_sync(doc_id, text, metadata)
+  def index_and_connect(doc_id, text, metadata \\ %{})
+  def index_and_connect(doc_id, text, metadata) do
+    {:ok, result} = Mosaic.Indexer.index_document(doc_id, text, metadata)
     {:ok, conn} = Mosaic.ConnectionPool.checkout(result.shard_path)
     {result, conn}
   end

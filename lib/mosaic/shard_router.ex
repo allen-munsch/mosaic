@@ -377,18 +377,15 @@ defmodule Mosaic.ShardRouter do
   end
 
   defp load_bloom_filters(conn) do
-    case Mosaic.DB.query(
-           conn,
-           "SELECT id, bloom_filter FROM shard_metadata WHERE status = 'active' AND bloom_filter IS NOT NULL",
-           []
-         ) do
-      {:ok, rows} ->
+    case Mosaic.DB.query(conn, "SELECT id, bloom_filter FROM shard_metadata WHERE status = 'active' AND bloom_filter IS NOT NULL", []) do
+      {:ok, rows} when is_list(rows) ->
         rows
         |> Enum.map(fn [id, bloom_blob] -> {id, :erlang.binary_to_term(bloom_blob)} end)
         |> Map.new()
-
       {:error, err} ->
         Logger.error("Error loading bloom filters: #{inspect(err)}")
+        %{}
+      _ ->
         %{}
     end
   end

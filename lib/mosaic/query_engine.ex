@@ -38,13 +38,23 @@ defmodule Mosaic.QueryEngine do
   end
 
   def init(opts) do
+    IO.inspect(opts, label: "QueryEngine init received opts")
+    IO.inspect(Keyword.get(opts, :index_strategy), label: "index_strategy from opts")
+
+    strategy_module = Keyword.get(opts, :index_strategy, "binary")
+    IO.inspect(strategy_module, label: "strategy_module resolved")
     cache_impl = Keyword.get(opts, :cache, Mosaic.Cache.ETS)
     cache_name = Keyword.get(opts, :cache_name, cache_impl)
     cache_ttl = Keyword.get(opts, :cache_ttl, 300)
     ranker = Keyword.get(opts, :ranker, Ranker.new())
 
-    strategy_module = Keyword.get(opts, :index_strategy, "centroid")
+    strategy_module = Keyword.get(opts, :index_strategy, "binary")
     index_strategy = case strategy_module do
+      "binary" -> Mosaic.Index.Strategy.Binary
+      "centroid" -> Mosaic.Index.Strategy.Centroid
+      "hnsw" -> Mosaic.Index.Strategy.HNSW
+      "ivf" -> Mosaic.Index.Strategy.IVF
+      "pq" -> Mosaic.Index.Strategy.PQ
       "quantized" -> Mosaic.Index.Strategy.Quantized
       _ -> Mosaic.Index.Strategy.Centroid
     end
@@ -141,7 +151,7 @@ defmodule Mosaic.QueryEngine do
         results = ranked |> Enum.take(limit) |> deduplicate_results()
 
         if expand_context do
-          {:ok, expand_with_grounding(results, [])} # Shards are not relevant in this context anymore for grounding
+          {:ok, expand_with_grounding(results, state)} # Pass the full state here
         else
           {:ok, Enum.map(results, &Map.put(&1, :grounding, nil))}
         end
@@ -152,62 +162,91 @@ defmodule Mosaic.QueryEngine do
   end
 
 
-  defp expand_with_grounding(results, state) do
+  defp expand_with_grounding([], _state), do: []
+  defp expand_with_grounding(results, state) when is_list(results) do
     Enum.map(results, fn result ->
-      grounding = fetch_grounding(result, state)
-      Map.put(result, :grounding, grounding)
+      case fetch_grounding(result, state) do
+        nil -> Map.put(result, :grounding, nil)
+        grounding -> Map.put(result, :grounding, grounding)
+      end
     end)
   end
 
-  defp fetch_grounding(result, state) do
-    case state.index_strategy do
-      Mosaic.Index.Strategy.Centroid ->
-        shard_id = result.shard_id
-        case Mosaic.ShardRouter.list_all_shards() do
-          shards ->
-            shard = Enum.find(shards, &(&1.id == shard_id))
-            if shard do
-              case Mosaic.ConnectionPool.checkout(shard.path) do
-                {:ok, conn} ->
-                  doc_text = fetch_doc_text(conn, result.doc_id)
-                  parent_context = fetch_parent_context(conn, result.parent_id)
-                  Mosaic.ConnectionPool.checkin(shard.path, conn)
+  defp fetch_grounding([], _state), do: nil
+    defp fetch_grounding(result, state) when is_map(result) do
+      case state.index_strategy do
+        # 1. Centroid Strategy (Distributed Shards)
+        Mosaic.Index.Strategy.Centroid ->
+          shard_id = result.shard_id
+          case Mosaic.ShardRouter.list_all_shards() do
+            shards ->
+              shard = Enum.find(shards, &(&1.id == shard_id))
+              if shard do
+                case Mosaic.ConnectionPool.checkout(shard.path) do
+                  {:ok, conn} ->
+                    doc_text = fetch_doc_text(conn, result.doc_id)
+                    parent_context = fetch_parent_context(conn, result.parent_id)
+                    Mosaic.ConnectionPool.checkin(shard.path, conn)
 
-                  %Reference{
-                    chunk_id: result.id,
-                    doc_id: result.doc_id,
-                    doc_text: doc_text,
-                    chunk_text: result.text,
-                    start_offset: result.start_offset,
-                    end_offset: result.end_offset,
-                    parent_context: parent_context,
-                    level: result.level
-                  }
-                _ -> nil
+                    %Reference{
+                      chunk_id: result.id,
+                      doc_id: result.doc_id,
+                      doc_text: doc_text,
+                      chunk_text: result.text,
+                      start_offset: result.start_offset,
+                      end_offset: result.end_offset,
+                      parent_context: parent_context,
+                      level: result.level
+                    }
+                  _ -> nil
+                end
+              else
+                nil
               end
-            else
-              nil
-            end
-        end
-      Mosaic.Index.Strategy.Quantized ->
-        # For quantized strategy, `result` should contain `cell_path`
-        # and `doc_id` directly, as text is not stored in cell.
-        # Grounding would involve looking up the original document if needed.
-        # For now, return a simplified grounding based on metadata.
-        # A full implementation would need a mechanism to retrieve original document text.
-        %Reference{
-          chunk_id: result.id,
-          doc_id: result.id, # In quantized, doc_id is chunk_id
-          doc_text: "Text not available in quantized cell for grounding directly.",
-          chunk_text: result.metadata["text"] || "Text not available.",
-          start_offset: 0,
-          end_offset: 0,
-          parent_context: nil,
-          level: :document # Assuming document level for quantized cells
-        }
-      _ -> nil
+          end
+
+        # 2. Quantized Strategy
+        Mosaic.Index.Strategy.Quantized ->
+          # Quantized stores minimal data in cells.
+          # We attempt to retrieve text from metadata, otherwise return a placeholder.
+          %Reference{
+            chunk_id: result.id,
+            doc_id: result.id, # In quantized, doc_id is often the chunk_id
+            doc_text: "Text not available in quantized cell for grounding directly.",
+            chunk_text: Map.get(result.metadata || %{}, "text", "Text not available."),
+            start_offset: Map.get(result.metadata || %{}, "start_offset", 0),
+            end_offset: Map.get(result.metadata || %{}, "end_offset", 0),
+            parent_context: nil,
+            level: :document
+          }
+
+        # 3. In-Memory/Local Index Strategies (HNSW, Binary, IVF, PQ)
+        # These strategies return candidates containing a `metadata` map.
+        # We extract grounding info directly from this metadata.
+        strategy when strategy in [
+          Mosaic.Index.Strategy.HNSW,
+          Mosaic.Index.Strategy.Binary,
+          Mosaic.Index.Strategy.IVF,
+          Mosaic.Index.Strategy.PQ
+        ] ->
+          metadata = result.metadata || %{}
+
+          %Reference{
+            chunk_id: result.id,
+            # Try to find a specific doc_id in metadata, otherwise fallback to result.id
+            doc_id: Map.get(metadata, "doc_id", result.id),
+            # Text is usually stored in metadata for these local indices
+            doc_text: Map.get(metadata, "doc_text", "Full document text not stored in index."),
+            chunk_text: Map.get(metadata, "text") || Map.get(metadata, "chunk_text", "Text not available."),
+            start_offset: Map.get(metadata, "start_offset", 0),
+            end_offset: Map.get(metadata, "end_offset", 0),
+            parent_context: Map.get(metadata, "parent_context"),
+            level: Map.get(metadata, "level", :fragment)
+          }
+
+        _ -> nil
+      end
     end
-  end
 
   defp fetch_doc_text(conn, doc_id) do
     case Mosaic.DB.query_one(conn, "SELECT text FROM documents WHERE id = ?", [doc_id]) do

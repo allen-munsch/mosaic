@@ -267,15 +267,16 @@ defmodule Mosaic.Index.Strategy.IVF do
     1.0 / (1.0 + distance(v1, v2, :euclidean))
   end
 
-  defp search_buffer(_query_embedding, opts, state) do
+  defp search_buffer(query_embedding, opts, state) do
     limit = Keyword.get(opts, :limit, 20)
 
     results = state.training_buffer
     |> Enum.map(fn {doc, embedding} ->
       %{
         id: doc.id,
-        vector: embedding,
-        metadata: doc.metadata
+        similarity: similarity(query_embedding, embedding, state.distance_fn),
+        metadata: doc.metadata,
+        vector: embedding
       }
     end)
     |> Enum.sort_by(& &1.similarity, :desc)

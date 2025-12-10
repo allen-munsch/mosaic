@@ -11,7 +11,8 @@ defmodule Mosaic.Application do
 
   def start(_type, _args) do
     Logger.info("Starting MosaicDB")
-    
+    IO.inspect(Application.get_all_env(:mosaic), label: "All config")
+
     children = [
       # Cluster coordination
       {Cluster.Supervisor, [topologies(), [name: Mosaic.ClusterSupervisor]]},
@@ -50,8 +51,7 @@ defmodule Mosaic.Application do
         cache_ttl: Mosaic.Config.get(:query_cache_ttl_seconds),
         ranker: Mosaic.Ranking.Ranker.new(ranker_config()),
         index_strategy: Mosaic.Config.get(:index_strategy)
-      ]},
-
+      ] |> IO.inspect(label: "QueryEngine child spec opts")},
 
       # WARM PATH: Analytics engine (DuckDB)
       {Mosaic.DuckDBBridge, []},
@@ -71,7 +71,7 @@ defmodule Mosaic.Application do
       # API
       {Plug.Cowboy, scheme: :http, plug: Mosaic.API, options: [port: port()]}
     ]
-    
+
     configure_nx_backend()
     Supervisor.start_link(children, strategy: :one_for_one, name: Mosaic.Supervisor)
   end
@@ -141,18 +141,18 @@ defmodule Mosaic.Application do
   end
 
   defp index_strategy_child_spec do
-    strategy_name = Mosaic.Config.get(:index_strategy, "centroid")
-    
+    strategy_name = Mosaic.Config.get(:index_strategy)
+    IO.inspect(strategy_name, label: "index_strategy_child_spec: strategy_name")
     strategy_module = case strategy_name do
-      "centroid" -> Mosaic.Index.Strategy.Centroid
-      "quantized" -> Mosaic.Index.Strategy.Quantized
-      "hnsw" -> Mosaic.Index.Strategy.HNSW
       "binary" -> Mosaic.Index.Strategy.Binary
+      "centroid" -> Mosaic.Index.Strategy.Centroid
+      "hnsw" -> Mosaic.Index.Strategy.HNSW
       "ivf" -> Mosaic.Index.Strategy.IVF
       "pq" -> Mosaic.Index.Strategy.PQ
-      _ -> Mosaic.Index.Strategy.Centroid
+      "quantized" -> Mosaic.Index.Strategy.Quantized
+      _ -> Mosaic.Index.Strategy.Binary
     end
-    
+
     strategy_opts = get_strategy_opts(strategy_name)
     {Mosaic.Index.Supervisor, [strategy: strategy_module, opts: strategy_opts]}
   end

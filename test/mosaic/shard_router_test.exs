@@ -156,25 +156,25 @@ defmodule Mosaic.ShardRouterTest do
     query_vector = List.duplicate(1.0, 1536) # Query vector that is highly similar to high centroids
 
     # Query at document level
-    {:ok, doc_shards} = Mosaic.ShardRouter.find_similar_shards(query_vector, 3, vector_math_impl: TestVectorMath, level: :document, min_similarity: 0.1)
+    doc_shards = Mosaic.ShardRouter.find_similar_shards_sync(query_vector, 3, vector_math_impl: TestVectorMath, level: :document, min_similarity: 0.1)
     assert length(doc_shards) == 3
     assert Enum.map(doc_shards, & &1.id) |> Enum.sort() == ["shard1", "shard2", "shard3"]
     assert doc_shards |> hd() |> Map.get(:id) == "shard1" # Shard1 has highest doc similarity
 
     # Query at paragraph level
-    {:ok, para_shards} = Mosaic.ShardRouter.find_similar_shards(query_vector, 3, vector_math_impl: TestVectorMath, level: :paragraph, min_similarity: 0.1)
+    para_shards = Mosaic.ShardRouter.find_similar_shards_sync(query_vector, 3, vector_math_impl: TestVectorMath, level: :paragraph, min_similarity: 0.1)
     assert length(para_shards) == 2 # Shard3 has no paragraph centroid
     assert Enum.map(para_shards, & &1.id) |> Enum.sort() == ["shard1", "shard2"]
     assert para_shards |> hd() |> Map.get(:id) == "shard1" # Shard1 has highest para similarity
 
     # Query at sentence level
-    {:ok, sent_shards} = Mosaic.ShardRouter.find_similar_shards(query_vector, 3, vector_math_impl: TestVectorMath, level: :sentence, min_similarity: 0.1)
+    sent_shards = Mosaic.ShardRouter.find_similar_shards_sync(query_vector, 3, vector_math_impl: TestVectorMath, level: :sentence, min_similarity: 0.1)
     assert length(sent_shards) == 2 # Shard3 has no sentence centroid
     assert Enum.map(sent_shards, & &1.id) |> Enum.sort() == ["shard1", "shard2"]
     assert sent_shards |> hd() |> Map.get(:id) == "shard2" # Shard2 has highest sentence similarity
 
     # Test default level (paragraph)
-    {:ok, default_shards} = Mosaic.ShardRouter.find_similar_shards(query_vector, 3, vector_math_impl: TestVectorMath, min_similarity: 0.1)
+    default_shards = Mosaic.ShardRouter.find_similar_shards_sync(query_vector, 3, vector_math_impl: TestVectorMath, min_similarity: 0.1)
     assert length(default_shards) == 2
     assert Enum.map(default_shards, & &1.id) |> Enum.sort() == ["shard1", "shard2"]
     assert default_shards |> hd() |> Map.get(:id) == "shard1"

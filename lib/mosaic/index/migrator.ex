@@ -78,9 +78,25 @@ defmodule Mosaic.Index.Migrator do
   """
   def switch_strategy(new_strategy_name) do
     case new_strategy_name do
+      "binary" ->
+        Mosaic.Config.update_setting(:index_strategy, "binary")
+        Logger.info("Switched active indexing strategy to 'binary'")
+        :ok
       "centroid" ->
         Mosaic.Config.update_setting(:index_strategy, "centroid")
         Logger.info("Switched active indexing strategy to 'centroid'")
+        :ok
+      "hnsw" ->
+        Mosaic.Config.update_setting(:index_strategy, "hnsw")
+        Logger.info("Switched active indexing strategy to 'hnsw'")
+        :ok
+      "ivf" ->
+        Mosaic.Config.update_setting(:index_strategy, "ivf")
+        Logger.info("Switched active indexing strategy to 'ivf'")
+        :ok
+      "pq" ->
+        Mosaic.Config.update_setting(:index_strategy, "pq")
+        Logger.info("Switched active indexing strategy to 'pq'")
         :ok
       "quantized" ->
         Mosaic.Config.update_setting(:index_strategy, "quantized")

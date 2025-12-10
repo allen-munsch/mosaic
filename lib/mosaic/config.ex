@@ -43,7 +43,7 @@ defmodule Mosaic.Config do
     weight_text_match: 0.1,
     fusion_strategy: "weighted_sum",
     min_score: 0.0,
-    index_strategy: "centroid",  # or "quantized"
+    index_strategy: "hnsw",  # or centroid, hnsw, ivf, pq see: lib/mosaic/index/
     quantized_bins: 16,
     quantized_dims_per_level: 8,
     quantized_cell_capacity: 10_000,

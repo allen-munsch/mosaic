@@ -25,11 +25,24 @@ defmodule Mosaic.HybridQuery do
     |> Enum.take(limit)
   end
 
-  defp select_shards(embedding, opts) do
-    shard_limit = Keyword.get(opts, :shard_limit, 10)
-    case Mosaic.ShardRouter.find_similar_shards_sync(embedding, shard_limit, opts) do
-      {:ok, shards} -> shards
-      {:error, _} -> []
+  def select_shards(query_embedding, opts \\ []) do
+    shard_limit = Keyword.get(opts, :shard_limit, 5)
+    
+    case Mosaic.ShardRouter.find_similar_shards_sync(query_embedding, shard_limit, opts) do
+      shards when is_list(shards) ->
+        Enum.map(shards, fn shard ->
+          %{id: shard.id, path: shard.path, similarity: shard.similarity}
+        end)
+      {:ok, shards} when is_list(shards) ->
+        Enum.map(shards, fn shard ->
+          %{id: shard.id, path: shard.path, similarity: shard.similarity}
+        end)
+      {:error, reason} ->
+        Logger.error("Failed to select shards: #{inspect(reason)}")
+        []
+      other ->
+        Logger.warning("Unexpected shard response: #{inspect(other)}")
+        []
     end
   end
 

@@ -204,21 +204,25 @@ defmodule Mosaic.Index.Strategy.HNSW do
     ep = greedy_search_to_level(state, ep, node.vector, node.level + 1)
     
     # Insert at each level from node.level down to 0
-    new_layers = Enum.reduce(node.level..0, state.layers, fn level, layers ->
-      layer = Map.get(layers, level, Layer.new())
+    # Ensure all layers exist from 0 to node.level
+    initial_layers = Enum.reduce(0..node.level, state.layers, fn lvl, acc ->
+      Map.put_new(acc, lvl, Layer.new())
+    end)
+
+    new_layers = Enum.reduce(node.level..0//-1, initial_layers, fn level, layers ->
+      layer = Map.get(layers, level)
       
       # Find ef_construction nearest neighbors
-      neighbors = search_layer_internal(
-        node.vector,
-        ep,
-        state.ef_construction,
-        level,
-        state
-      )
+            {neighbors_list, _visited} = search_layer_internal(
+              node.vector,
+              ep,
+              state.ef_construction,
+              level,
+              state
+            )
       
-      # Select M best neighbors
-      selected = select_neighbors(neighbors, state.m, state.distance_fn)
-      
+            # Select M best neighbors
+            selected = select_neighbors(neighbors_list, state.m, state.distance_fn)      
       # Add bidirectional connections
       updated_layer = layer
       |> Layer.add_node(node)
@@ -235,10 +239,16 @@ defmodule Mosaic.Index.Strategy.HNSW do
     %{state | layers: new_layers, node_count: state.node_count + 1}
   end
   
+  defp greedy_search_to_level(_state, entry_point, _query, target_level) when entry_point.level <= target_level do
+    entry_point
+  end
+
   defp greedy_search_to_level(state, entry_point, query, target_level) do
-    Enum.reduce((entry_point.level)..(target_level + 1), entry_point, fn level, ep ->
-      {[{closest, _} | _], _} = search_layer_internal(query, ep, 1, level, state)
-      closest
+    Enum.reduce(entry_point.level..(target_level + 1)//-1, entry_point, fn level, ep ->
+      case search_layer_internal(query, ep, 1, level, state) do
+        {[{closest, _} | _], _} -> closest
+        {[], _} -> ep
+      end
     end)
   end
   
@@ -303,10 +313,13 @@ defmodule Mosaic.Index.Strategy.HNSW do
     end
   end
   
-  defp select_neighbors(candidates, m, _distance_fn) do
+  defp select_neighbors(candidates, m, _distance_fn) when is_list(candidates) do
     candidates
     |> Enum.sort_by(fn {_, dist} -> dist end)
     |> Enum.take(m)
+  end
+  defp select_neighbors({candidates_list, _visited}, m, distance_fn) do
+    select_neighbors(candidates_list, m, distance_fn)
   end
   
   defp update_entry_point(state, node) do
@@ -340,7 +353,7 @@ defmodule Mosaic.Index.Strategy.HNSW do
     dot = Enum.zip(v1, v2) |> Enum.reduce(0.0, fn {a, b}, acc -> acc + a * b end)
     norm1 = :math.sqrt(Enum.reduce(v1, 0.0, fn x, acc -> acc + x * x end))
     norm2 = :math.sqrt(Enum.reduce(v2, 0.0, fn x, acc -> acc + x * x end))
-    dot / (norm1 * norm2 + 1.0e-10)
+    if norm1 == 0.0 or norm2 == 0.0, do: 0.0, else: dot / (norm1 * norm2)
   end
   
   defp distance_to_similarity(dist, :cosine), do: 1.0 - dist

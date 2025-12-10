@@ -1,14 +1,14 @@
 defmodule Mosaic.Index.Strategy do
   @moduledoc """
   Behaviour for pluggable indexing strategies.
-  
+
   Supported strategies:
-  - :centroid - Centroid-based shard routing (default)
-  - :quantized - Scalar quantization with hierarchical cells
-  - :hnsw - Hierarchical Navigable Small World graphs
   - :binary - Binary embeddings with XOR + POPCNT
+  - :centroid - Centroid-based shard routing (default)
+  - :hnsw - Hierarchical Navigable Small World graphs
   - :ivf - Inverted File Index with clustering
   - :pq - Product Quantization for compressed vectors
+  - :quantized - Scalar quantization with hierarchical cells
   """
 
   @type vector :: [float()]
@@ -25,7 +25,7 @@ defmodule Mosaic.Index.Strategy do
   @callback init(opts :: keyword()) :: {:ok, state :: term()} | {:error, term()}
 
   @doc "Index a document with its embedding"
-  @callback index_document(doc :: document(), embedding :: vector() | binary_vector(), state :: term()) :: 
+  @callback index_document(doc :: document(), embedding :: vector() | binary_vector(), state :: term()) ::
     {:ok, term()} | {:error, term()}
 
   @doc "Index multiple documents in batch (optional, default iterates)"
@@ -36,7 +36,7 @@ defmodule Mosaic.Index.Strategy do
   @callback delete_document(doc_id :: String.t(), state :: term()) :: :ok | {:error, term()}
 
   @doc "Find candidate documents for a query embedding"
-  @callback find_candidates(query_embedding :: vector() | binary_vector(), opts :: search_opts(), state :: term()) :: 
+  @callback find_candidates(query_embedding :: vector() | binary_vector(), opts :: search_opts(), state :: term()) ::
     {:ok, [candidate()]} | {:error, term()}
 
   @doc "Get strategy statistics and health info"
