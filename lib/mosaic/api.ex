@@ -126,7 +126,7 @@ defmodule Mosaic.API do
 
         case Mosaic.Indexer.index_document(id, text, metadata) do
           {:ok, result} -> json_ok(conn, 201, %{id: result.id, status: result.status})
-          {:error, :queue_full} -> json_error(conn, 503, "Server busy, try again")
+
         end
 
       %{"documents" => docs} when is_list(docs) ->
