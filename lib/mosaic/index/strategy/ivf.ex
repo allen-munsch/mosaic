@@ -12,7 +12,7 @@ defmodule Mosaic.Index.Strategy.IVF do
   """
 
   @behaviour Mosaic.Index.Strategy
-  require Logger
+
 
   defstruct [
     :base_path,

@@ -1,6 +1,6 @@
 defmodule Mosaic.API do
   use Plug.Router
-  require Logger
+
 
   plug(:parse_body)
   plug(Plug.Logger)

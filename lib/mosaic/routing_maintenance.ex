@@ -1,6 +1,6 @@
 defmodule Mosaic.RoutingMaintenance do
   use GenServer
-  require Logger
+
 
   @refresh_interval :timer.hours(1)
   @sample_size 100

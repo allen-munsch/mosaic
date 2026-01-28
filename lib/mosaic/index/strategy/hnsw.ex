@@ -14,7 +14,6 @@ defmodule Mosaic.Index.Strategy.HNSW do
   """
   
   @behaviour Mosaic.Index.Strategy
-  require Logger
   
   alias Mosaic.Index.HNSW.{Node, Layer}
   

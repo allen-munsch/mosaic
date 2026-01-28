@@ -1,6 +1,6 @@
 defmodule Mosaic.EmbeddingCache do
   use GenServer
-  require Logger
+
 
   defmodule State do
     defstruct [:cache, :lru_queue, :max_size, :cache_hits, :cache_misses]
