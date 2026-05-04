@@ -43,9 +43,11 @@ defmodule Mix.Tasks.Mosaic.Mcp do
   @shortdoc "Start MosaicDB as an MCP stdio server"
 
   def run(_args) do
-    # Enable MCP mode
-    Application.put_env(:mosaic, :mcp_enabled, true)
-    Application.put_env(:mosaic, :mcp_transport, "stdio")
+    # Priority: env var → app config → defaults
+    # MOSAIC_QUIET suppresses startup and debug noise
+    if System.get_env("MOSAIC_QUIET") == "1" do
+      Application.put_env(:mosaic, :startup_quiet, true)
+    end
 
     # MCP requires stdout for JSON-RPC only; Logger output is acceptable
     # as stderr, which is the default.

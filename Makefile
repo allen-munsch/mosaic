@@ -1,33 +1,46 @@
 .PHONY: help test test-watch test-new test-isolated compile format clean
 
+# ── Install ──────────────────────────────────────────────────────
+install:
+	@echo "Installing mosaic CLI..."
+	@cp bin/mosaic /usr/local/bin/mosaic 2>/dev/null && echo "  → /usr/local/bin/mosaic" || \
+		{ cp bin/mosaic $$HOME/.local/bin/mosaic 2>/dev/null && echo "  → $$HOME/.local/bin/mosaic"; } || \
+		{ echo "  Could not install. Run: sudo cp bin/mosaic /usr/local/bin/"; exit 1; }
+	@echo "  Try: mosaic help"
+
+release:
+	@echo "Building release..."
+	@MIX_ENV=prod mix release mosaic 2>&1 | tail -3
+	@echo "Release at: _build/prod/rel/mosaic/bin/mosaic"
+	@du -sh _build/prod/rel/mosaic/
+
 # ── Default ──────────────────────────────────────────────────────
 help:
 	@echo "MosaicDB — Federated Semantic Code Graph"
 	@echo "========================================"
 	@echo ""
-	@echo "  make test            Run full test suite"
-	@echo "  make test-watch      Run tests on file changes"
-	@echo "  make test-new        Run only new tests (phases 1-6)"
-	@echo "  make test-isolated   Run each test file separately"
+	@echo "  make install         Install mosaic CLI to /usr/local/bin"
+	@echo "  make release         Build self-contained release"
+	@echo ""
+	@echo "  make test            Run full test suite (203 tests)"
 	@echo "  make compile         Compile project"
 	@echo "  make format          Format all code"
 	@echo "  make clean           Remove build artifacts"
 	@echo ""
-	@echo "  make demo            Full demo: index code → traverse → search → report"
-	@echo "  make index           Index the MosaicDB codebase into the graph"
-	@echo "  make search          Run semantic search against indexed code"
-	@echo "  make traverse        Run graph traversal demos"
-	@echo "  make graph-report    Show graph analysis (god nodes, communities)"
+	@echo "  make demo            Full pipeline showcase"
+	@echo "  make index           Index the MosaicDB codebase"
+	@echo "  make search          Text search against indexed code"
+	@echo "  make traverse        Graph traversal demos"
+	@echo "  make graph-report    Graph analysis report"
 	@echo ""
-	@echo "  make iex             Start IEx with app loaded"
 	@echo "  make server          Start HTTP server (port 4040)"
-	@echo ""
-	@echo "  make mcp-server      Start MCP stdio server"
-	@echo "  make mcp-http        Start HTTP server + show curl examples"
 	@echo "  make mcp-test        Smoke-test MCP over stdio"
-	@echo "  make mcp-curl        Show curl commands for MCP HTTP endpoint"
+	@echo "  make mcp-curl        Show curl commands for MCP HTTP"
 	@echo ""
-	@echo "  make integration     Matryoshka integration demo (concept showcase)"
+	@echo "  bin/mosaic ingest <path>   CLI: index any codebase"
+	@echo "  bin/mosaic search <query>  CLI: search indexed code"
+	@echo "  bin/mosaic traverse <node> CLI: navigate graph"
+	@echo "  bin/mosaic report          CLI: graph analysis"
 	@echo ""
 
 # ── Test ─────────────────────────────────────────────────────────

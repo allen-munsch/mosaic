@@ -10,6 +10,10 @@ defmodule Mosaic.Application do
   """
 
   def start(_type, _args) do
+    if System.get_env("MOSAIC_QUIET") == "1" do
+      Application.put_env(:mosaic, :startup_quiet, true)
+      Logger.configure(level: :warning)
+    end
     Logger.info("Starting MosaicDB")
     if !Mosaic.Config.get(:startup_quiet) do
       IO.inspect(Application.get_all_env(:mosaic), label: "All config")
