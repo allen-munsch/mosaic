@@ -351,13 +351,102 @@ curl -X POST http://localhost:4040/mcp \
 
 ## Performance
 
-| Operation | CPU (i9-13900H, 20 cores) | GPU (RTX 3050, 4GB) |
-|-----------|---------------------------|---------------------|
-| Batch ingest | ~157ms/doc | ~57ms/doc |
-| Cold search (embed + search) | 700-750ms | 150-160ms |
-| Hot search (cached embedding) | **8-16ms** | **13-16ms** |
-| Parallel throughput (10 queries) | 23ms | 17ms |
+**Test system:** 13th Gen Intel Core i9-13900H (20 cores), 62GB RAM, NVIDIA RTX 3050 (4GB)
+
+| Operation | CPU | GPU (CUDA 12 + cuDNN) |
+|-----------|-----|----------------------|
+| Batch ingest (10 docs) | 710ms/doc | ~57ms/doc |
+| Cold search (embed + search) | 620-990ms | ~150-160ms |
+| Hot search (cached embedding) | **7-13ms** | **13-16ms** |
+| Parallel throughput (10 queries) | 636ms (63ms avg) | ~17ms |
 | DuckDB analytics | 10-50ms | 10-50ms |
+| Cache speedup | 44x-83x faster | 8x-10x faster |
+
+> **GPU mode** requires CUDA 12 toolkit + cuDNN. Set `XLA_TARGET=cuda12` and `nx_client: "cuda"` in config. The Dockerfile.cuda provides a pre-built GPU container.
+
+<details>
+<summary><b>📊 Full Demo Output (CPU)</b></summary>
+
+```
+    __  ___                _      ____  ____
+   /  |/  /___  _________ (_)____/ __ \/ __ )
+  / /|_/ / __ \/ ___/ __ `/ / ___/ / / / __  |
+ / /  / / /_/ (__  ) /_/ / / /__/ /_/ / /_/ /
+/_/  /_/\____/____/\__,_/_/\___/_____/_____/
+
+Federated Semantic Search + Analytics Engine
+SQLite + sqlite-vec │ DuckDB │ Local GPU Embeddings
+
+━━━ 1. SYSTEM STATUS ━━━
+  Health check: ok  ✓ 11ms (HTTP 200)
+  Metrics: {cache_misses: 0, cache_hits: 0, shard_count: 1}  ✓ 10ms
+
+━━━ 2. DOCUMENT INGESTION ━━━
+  Indexed 10 product reviews with GPU-accelerated embeddings
+  ✓ 7104ms total (710ms/doc)
+
+━━━ 3. SEMANTIC SEARCH - Cold vs Hot ━━━
+  Query: "comfortable for long work sessions"
+    {"id":"book_001","similarity":0.78}
+    {"id":"home_001","similarity":0.76}
+    COLD (embed + search): 670ms
+    HOT  (cached search):  7ms  (83x faster)
+
+  Query: "good morning drink with complex taste"
+    {"id":"prod_003","similarity":0.77}
+    {"id":"food_001","similarity":0.77}
+    COLD: 623ms → HOT: 13ms (44x faster)
+
+  Query: "high performance computing device"
+    {"id":"prod_002","similarity":0.78}
+    {"id":"prod_001","similarity":0.77}
+    COLD: 990ms → HOT: 12ms (76x faster)
+
+━━━ 4. HYBRID SEARCH - Vector + SQL Filter ━━━
+  Query: "premium quality WHERE category='electronics'"
+    {"id":"prod_002","similarity":0.78,"category":"electronics"}
+    {"id":"prod_001","similarity":0.74,"category":"electronics"}
+    COLD: 710ms → HOT: 14ms
+
+  Query: "highly recommended WHERE rating >= 5"
+    {"id":"book_001","similarity":0.82,"category":"books"}
+    {"id":"prod_001","similarity":0.78,"category":"electronics"}
+    COLD: 740ms → HOT: 13ms
+
+━━━ 5. ANALYTICS (DuckDB Warm Path) ━━━
+  Document count: [[10]]  ✓ 28ms
+  Category breakdown: [["electronics",3],["food",2],...]  ✓ 3300ms
+  Price range by category: [["home",899.99],...]  ✓ 1300ms
+
+━━━ 6. SHARD TOPOLOGY ━━━
+  Active shards: 3 (2 data + 1 demo graph)  ✓ 6ms
+
+━━━ 7. THROUGHPUT TEST ━━━
+  10 parallel searches with warm cache
+  ✓ 10 queries in 636ms (63ms avg per query)
+
+━━━ 8. FINAL METRICS ━━━
+  {cache_misses: 15, cache_hits: 23, shard_count: 3}  ✓ 12ms
+
+    COLD query (embedding gen):  ~620-990ms
+    HOT  query (cached):        ~7-13ms
+    Analytics (DuckDB):         ~10-50ms
+    Batch ingest:               ~710ms/doc
+
+    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+    │   Query     │───▶│  Embedding  │───▶│   Cache     │
+    │             │    │  (GPU/CPU)  │    │   (ETS)     │
+    └─────────────┘    └─────────────┘    └──────┬──────┘
+                                                 │
+         ┌───────────────────────────────────────┴───┐
+         ▼                                           ▼
+    ┌─────────────┐                          ┌─────────────┐
+    │  sqlite-vec │  HOT PATH  (<15ms)       │   DuckDB    │
+    │   (search)  │                          │ (analytics) │
+    └─────────────┘                          └─────────────┘
+```
+
+</details>
 
 ---
 
