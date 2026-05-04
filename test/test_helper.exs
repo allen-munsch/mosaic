@@ -1,5 +1,9 @@
 ExUnit.start()
-ExUnit.configure(exclude: [:redis, :slow])
+# Tags excluded by default:
+#   :redis     — requires Redis instance
+#   :slow      — long-running benchmarks
+#   :embedding — requires EXLA/Bumblebee model (run with: mix test --include embedding)
+ExUnit.configure(exclude: [:redis, :slow, :embedding])
 
 # Enable sync indexing for tests
 Application.put_env(:mosaic, :sync_indexing, true)
