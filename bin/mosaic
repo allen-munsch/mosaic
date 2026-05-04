@@ -32,6 +32,13 @@ case "$cmd" in
     $RUNNER $EVAL_CMD 'Application.ensure_all_started(:mosaic); Mosaic.ShardAutoDiscover.discover(); q=System.argv()|>hd(); case Mosaic.RAG.Pipeline.retrieve(q,top_k: 5)do {:ok,r}->if r.chunks==[]do IO.puts("No matching chunks. Ingest docs first: mosaic docs <path>") else IO.puts("Found #{length(r.chunks)} chunks (~#{r.token_count} tokens):"); Enum.each(r.chunks,fn c->IO.puts("  [#{c.similarity}] #{String.slice(c.name||"",0,100)}"); IO.puts("  Source: #{c.file_path}"); IO.puts("") end) end; {:error,r}->IO.puts("Error: #{inspect(r)}") end' "$query" 2>&1 | quiet_filter
     ;;
 
+  # ── Reify ──────────────────────────────────────────────────
+  reify)
+    input="${1:-}"; framework="${2:-react}"
+    [ -z "$input" ] && { echo "Usage: mosaic reify <sexpr|file> [react|vue|html]"; exit 1; }
+    $RUNNER run scripts/reify_cmd.exs "$input" "$framework" 2>&1 | quiet_filter
+    ;;
+
   # ── Search ──────────────────────────────────────────────────
   search)
     query="${1:-}"; [ -z "$query" ] && { echo "Usage: mosaic search <query>"; exit 1; }
@@ -82,7 +89,7 @@ case "$cmd" in
     echo ""
     echo "Other:"
     echo "  mosaic status             Show shard storage"
-    echo "  mosaic demo               Run interactive demo"
+    echo "  mosaic reify <sexpr> <fw> Transpile S-expr to React/Vue/HTML"
     echo ""
     echo "Examples:"
     echo "  mosaic ingest ~/projects/myapp"
