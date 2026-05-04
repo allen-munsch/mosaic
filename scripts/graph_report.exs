@@ -72,6 +72,12 @@ case Mosaic.Graph.Report.generate() do
     end
 
   {:error, reason} ->
-    IO.puts("No indexed data yet. Run 'make index' first.")
-    IO.puts("Error: #{inspect(reason)}")
+    IO.puts("Report generation failed: #{inspect(reason)}")
+    IO.puts("")
+    # Fallback: show simple stats
+    {:ok, nc} = Mosaic.Graph.Traversal.node_counts()
+    {:ok, ec} = Mosaic.Graph.Traversal.edge_counts()
+    tn = nc |> Enum.map(fn [_, c] -> c end) |> Enum.sum()
+    te = ec |> Enum.map(fn [_, c] -> c end) |> Enum.sum()
+    IO.puts("Basic stats: #{tn} nodes, #{te} edges")
 end

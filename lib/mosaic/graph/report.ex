@@ -72,7 +72,7 @@ defmodule Mosaic.Graph.Report do
     """
 
     case Mosaic.FederatedQuery.execute(sql, [top_n]) do
-      {:ok, rows} ->
+      rows when is_list(rows) ->
         {:ok, Enum.map(rows, fn [src, tgt, type, conf, sname, tname, sfile, tfile] ->
           %{
             source: %{id: src, name: sname, file: sfile},

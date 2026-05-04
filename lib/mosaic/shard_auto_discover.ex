@@ -5,8 +5,6 @@ defmodule Mosaic.ShardAutoDiscover do
   separate processes can find previously-indexed data.
   """
 
-  require Logger
-
   def discover do
     storage = Mosaic.Config.get(:storage_path)
 

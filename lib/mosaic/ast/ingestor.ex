@@ -57,7 +57,7 @@ defmodule Mosaic.AST.Ingestor do
     exclude = Keyword.get(opts, :exclude, default_excludes())
     parallel = Keyword.get(opts, :parallel, System.schedulers_online())
 
-    files = to_string(dir)
+    files = Kernel.to_string(dir)
       |> Path.wildcard("**/*")
       |> Enum.filter(fn f ->
         matches = Enum.any?(patterns, &String.ends_with?(f, &1))
@@ -106,7 +106,7 @@ defmodule Mosaic.AST.Ingestor do
           |> Enum.map(&Path.join(repo_path, &1))
       else
         # All files
-        to_string(repo_path)
+        Kernel.to_string(repo_path)
           |> Path.wildcard("**/*")
           |> Enum.filter(&File.regular?/1)
       end

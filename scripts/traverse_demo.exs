@@ -17,9 +17,17 @@ mod_count = functions |> Enum.find_value(fn [t, c] -> t == "module" && c end) ||
 IO.puts("Indexed: #{fn_count} functions, #{mod_count} modules")
 IO.puts("")
 
-# Pick a node to explore
-{:ok, [[fn_name | _] | _]} = Mosaic.FederatedQuery.execute(
-  "SELECT name FROM nodes WHERE type = 'function' LIMIT 1", [])
+# Pick a function node to explore
+fn_rows = Mosaic.FederatedQuery.execute("SELECT name FROM nodes WHERE type = 'function' LIMIT 1", [])
+fn_name = case fn_rows do
+  [[name | _] | _] -> name
+  _ -> nil
+end
+
+if is_nil(fn_name) do
+  IO.puts("No functions indexed. Run 'make index' first.")
+  System.halt(0)
+end
 
 IO.puts("Exploring: #{fn_name}")
 IO.puts("")
