@@ -64,7 +64,7 @@ defp query_scalar(conn, sql) do
 end
 
 defp create_base_schema(conn) do
-  # Source documents (raw text only)
+  # ---- Legacy: documents + chunks (kept for backward compat) ----
   Exqlite.Sqlite3.execute(conn, """
     CREATE TABLE IF NOT EXISTS documents (
       id TEXT PRIMARY KEY,
@@ -75,7 +75,6 @@ defp create_base_schema(conn) do
     );
   """)
 
-  # Hierarchical chunks with provenance
   Exqlite.Sqlite3.execute(conn, """
     CREATE TABLE IF NOT EXISTS chunks (
       id TEXT PRIMARY KEY,
@@ -94,12 +93,89 @@ defp create_base_schema(conn) do
   Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_chunks_parent ON chunks(parent_id);")
   Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_chunks_level ON chunks(level);")
   Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_chunks_doc_level ON chunks(doc_id, level);")
+
+  # ---- Graph: property-graph schema for code analysis ----
+  create_graph_schema(conn)
+
+  # ---- Handles: token-efficient result storage with FTS5 ----
+  create_handles_schema(conn)
+
   :ok
+end
+
+# ── Graph Schema ──────────────────────────────────────────────
+
+defp create_graph_schema(conn) do
+  # Nodes: typed entities (modules, functions, classes, variables, etc.)
+  Exqlite.Sqlite3.execute(conn, """
+    CREATE TABLE IF NOT EXISTS nodes (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      language TEXT,
+      file_path TEXT,
+      start_line INTEGER,
+      end_line INTEGER,
+      source_text TEXT,
+      parent_id TEXT,
+      properties JSON,
+      embedding BLOB,
+      embedding_256 BLOB,
+      embedding_128 BLOB,
+      embedding_64 BLOB,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (parent_id) REFERENCES nodes(id)
+    );
+  """)
+
+  # Edges: typed directed relationships
+  Exqlite.Sqlite3.execute(conn, """
+    CREATE TABLE IF NOT EXISTS edges (
+      id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      confidence TEXT DEFAULT 'EXTRACTED',
+      properties JSON,
+      weight REAL DEFAULT 1.0,
+      FOREIGN KEY (source_id) REFERENCES nodes(id),
+      FOREIGN KEY (target_id) REFERENCES nodes(id)
+    );
+  """)
+
+  # Indexes for graph traversals
+  Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type);")
+  Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_id);")
+  Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_nodes_file ON nodes(file_path);")
+  Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name);")
+  Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id, type);")
+  Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id, type);")
+  Exqlite.Sqlite3.execute(conn, "CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_dedup ON edges(source_id, target_id, type);")
+end
+
+# ── Handles Schema ────────────────────────────────────────────
+
+defp create_handles_schema(conn) do
+  Exqlite.Sqlite3.execute(conn, """
+    CREATE TABLE IF NOT EXISTS handles (
+      handle_name TEXT PRIMARY KEY,
+      result_type TEXT NOT NULL DEFAULT 'array',
+      item_count INTEGER DEFAULT 0,
+      preview TEXT,
+      full_data BLOB,
+      created_at TEXT DEFAULT (datetime('now')),
+      ttl_seconds INTEGER DEFAULT 3600
+    );
+  """)
+
+  Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_handles_created ON handles(created_at);")
 end
 
 defp ensure_vector_table(conn) do
   embedding_dim = Mosaic.Config.get(:embedding_dim)
+  matryoshka_levels = Mosaic.Config.get(:matryoshka_levels, [64, 128, 256, embedding_dim])
 
+  # Legacy vec_chunks table
   create_vec_table = """
   CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(
     id TEXT PRIMARY KEY,
@@ -108,21 +184,30 @@ defp ensure_vector_table(conn) do
   """
 
   case Exqlite.Sqlite3.execute(conn, create_vec_table) do
-    :ok ->
-      Logger.debug("Created vec_chunks using vec0")
-      :ok
-
+    :ok -> Logger.debug("Created vec_chunks using vec0")
     {:error, reason} ->
-      Logger.error("""
-      Failed to create vec_chunks using vec0 extension.
-      The SQLite vec extension appears to be missing or not loaded.
-      Reason: #{inspect(reason)}
-      """)
-
-      raise """
-      SQLite vec extension (`vec0`) not loaded. Cannot continue.
-      """
+      Logger.error("Failed to create vec_chunks: #{inspect(reason)}")
+      raise "SQLite vec extension (`vec0`) not loaded. Cannot continue."
   end
+
+  # Graph vec tables at multiple matryoshka levels
+  Enum.each(matryoshka_levels, fn dims ->
+    table_name = :"vec_nodes_#{dims}"
+    create_sql = """
+    CREATE VIRTUAL TABLE IF NOT EXISTS #{table_name} USING vec0(
+      id TEXT PRIMARY KEY,
+      embedding float[#{dims}]
+    );
+    """
+
+    case Exqlite.Sqlite3.execute(conn, create_sql) do
+      :ok -> Logger.debug("Created #{table_name} using vec0")
+      {:error, reason} ->
+        Logger.warning("Failed to create #{table_name}: #{inspect(reason)}")
+    end
+  end)
+
+  :ok
 end
 
 defp sqlite_vec_path do
