@@ -41,7 +41,8 @@ defmodule Mosaic.MixProject do
       {:mox, "~> 1.0", only: :test},
       {:redix, "~> 1.0"},
       {:poolboy, "~> 1.5"},
-      {:duckdbex, "~> 0.3.18"}
+      {:duckdbex, "~> 0.3.18"},
+      {:ra, "~> 2.11"}
     ]
   end
 

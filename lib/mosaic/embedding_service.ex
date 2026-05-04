@@ -6,27 +6,62 @@ defmodule Mosaic.EmbeddingService do
   defp zero_embedding, do: List.duplicate(0.0, Mosaic.Config.get(:embedding_dim, 384))
 
   defmodule State do
-    defstruct [:model_type, :model_ref]
+    defstruct [:model_type, :model_ref, :model_name, :dimension]
   end
 
+  @doc "Supported embedding model configurations."
+  def models do
+    %{
+      "all-MiniLM-L6-v2" => %{dim: 384, source: :huggingface, model: "sentence-transformers/all-MiniLM-L6-v2"},
+      "all-mpnet-base-v2" => %{dim: 768, source: :huggingface, model: "sentence-transformers/all-mpnet-base-v2"},
+      "e5-large-v2" => %{dim: 1024, source: :huggingface, model: "intfloat/e5-large-v2"},
+      "text-embedding-3-small" => %{dim: 1536, source: :openai, model: "text-embedding-3-small"},
+      "text-embedding-3-large" => %{dim: 3072, source: :openai, model: "text-embedding-3-large"},
+      "text-embedding-ada-002" => %{dim: 1536, source: :openai, model: "text-embedding-ada-002"},
+      "gte-large" => %{dim: 1024, source: :huggingface, model: "thenlper/gte-large"},
+      "bge-large-en-v1.5" => %{dim: 1024, source: :huggingface, model: "BAAI/bge-large-en-v1.5"}
+    }
+  end
 
+  @doc "Get the dimension for the configured model."
+  def configured_dimension do
+    model_name = Mosaic.Config.get(:embedding_model_name, "all-MiniLM-L6-v2")
+    case Map.get(models(), model_name) do
+      %{dim: dim} -> dim
+      nil -> 384
+    end
+  end
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
   def init(_opts) do
-    model_type = Mosaic.Config.get(:embedding_model)
+    model_name = Mosaic.Config.get(:embedding_model_name, "all-MiniLM-L6-v2")
+    model_type = Mosaic.Config.get(:embedding_provider, "local")
+    model_config = Map.get(models(), model_name, %{dim: 384, source: :huggingface, model: "sentence-transformers/all-MiniLM-L6-v2"})
+
     model_ref = case model_type do
-      "local" -> create_local_serving()
+      "local" -> create_local_serving(model_config)
       "openai" -> :openai
-      "huggingface" -> :huggingface
-      _ -> create_local_serving()
+      "huggingface_cloud" -> :huggingface_cloud
+      _ -> create_local_serving(model_config)
     end
-    {:ok, %State{model_type: model_type, model_ref: model_ref}}
+
+    # Update the global dimension config
+    Application.put_env(:mosaic, :embedding_dim, model_config.dim)
+
+    {:ok, %State{
+      model_type: model_type,
+      model_ref: model_ref,
+      model_name: model_name,
+      dimension: model_config.dim
+    }}
   end
 
-  defp create_local_serving do
-    {:ok, model_info} = Bumblebee.load_model({:hf, "sentence-transformers/all-MiniLM-L6-v2"})
-    {:ok, tokenizer} = Bumblebee.load_tokenizer({:hf, "sentence-transformers/all-MiniLM-L6-v2"})
+  defp create_local_serving(model_config) do
+    model_id = model_config.model
+    Logger.info("Loading embedding model: #{model_id}")
+    {:ok, model_info} = Bumblebee.load_model({:hf, model_id})
+    {:ok, tokenizer} = Bumblebee.load_tokenizer({:hf, model_id})
     serving = Bumblebee.Text.text_embedding(model_info, tokenizer,
       compile: [batch_size: 32, sequence_length: 256],
       defn_options: [compiler: EXLA]

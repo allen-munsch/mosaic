@@ -1,34 +1,57 @@
-# Use the specified Elixir image as base
-FROM elixir:1.19.3-otp-28-slim
+# ── Builder Stage ──────────────────────────────────────────────
+FROM elixir:1.18.3 AS builder
 
-# Install necessary system dependencies
-# build-essential for compilation tools, git for mix deps that might be from git,
-# sqlite3 for the SQLite client (useful for debugging inside the container)
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    git \
-    sqlite3 \
-    curl \
-    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+ENV MIX_ENV=prod
+ENV LANG=C.UTF-8
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential git curl cmake libstdc++-12-dev \
+    python3 python3-pip nodejs npm \
     && rm -rf /var/lib/apt/lists/*
-ENV PATH="/root/.cargo/bin:$PATH"
 
-# Set the working directory inside the container
+RUN mix local.hex --force && mix local.rebar --force
+
 WORKDIR /app
+COPY mix.exs mix.lock ./
+RUN mix deps.get --only prod
 
-# Copy the application code
-COPY . /app
+COPY config config/
+COPY lib lib/
+COPY priv priv/
 
-# Install Elixir dependencies and compile the project
-# Use --force to ensure recompilation if needed
-# mix ecto.create and mix ecto.migrate are placeholders if you have Ecto setup
-RUN mix deps.get --only prod && \
-    mix deps.compile sqlite_vec && \
-    mix deps.compile duckdbex && \
-    mix compile
+RUN mix compile
+RUN mix release mosaic --overwrite
 
-# Expose the port your application runs on
+# ── Runtime Stage ──────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+ENV LANG=C.UTF-8
+ENV PORT=4040
+ENV MIX_ENV=prod
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates libstdc++6 curl poppler-utils \
+    python3 python3-pip nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install ast-grep (optional, fallback parser)
+RUN npm install -g @ast-grep/cli 2>/dev/null || true
+
+RUN groupadd -r mosaic && useradd -r -g mosaic -d /var/lib/mosaic mosaic
+
+COPY --from=builder /app/_build/prod/rel/mosaic /app
+RUN chown -R mosaic:mosaic /app
+
+RUN mkdir -p /var/lib/mosaic/shards /var/lib/mosaic/config /var/lib/mosaic/data
+RUN chown -R mosaic:mosaic /var/lib/mosaic
+
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+VOLUME ["/var/lib/mosaic/shards", "/var/lib/mosaic/config"]
+
 EXPOSE 4040
 
-# Define the command to run your application
-CMD ["mix", "run", "--no-halt"]
+USER mosaic
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["start"]
