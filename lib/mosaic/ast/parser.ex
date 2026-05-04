@@ -122,27 +122,30 @@ defmodule Mosaic.AST.Parser do
   defp run_ast_grep(source, lang) do
     lang_str = Atom.to_string(lang)
 
-    # ast-grep --lang elixir --json reads from stdin
-    case System.cmd("ast-grep", ["--lang", lang_str, "--json", "-"],
-          input: source, stderr_to_stdout: true) do
-      {output, 0} ->
-        {:ok, output}
+    # Write source to temp file, pass as argument to ast-grep
+    tmp = Path.join(System.tmp_dir!(), "mosaic_ast_#{System.unique_integer([:positive])}.tmp")
+    File.write!(tmp, source)
 
-      {output, _code} ->
-        # ast-grep may return non-zero for parse errors but still output JSON
-        # with error nodes. Try to decode anyway.
-        if String.starts_with?(String.trim(output), "{") or
-           String.starts_with?(String.trim(output), "[") do
-          Logger.debug("ast-grep exited non-zero but produced output: #{String.slice(output, 0, 100)}")
+    try do
+      case System.cmd("ast-grep", ["--lang", lang_str, "--json", tmp], stderr_to_stdout: true) do
+        {output, 0} ->
           {:ok, output}
-        else
-          Logger.debug("ast-grep failed for #{lang_str}: #{String.slice(output, 0, 200)}")
-          {:error, "ast-grep parse error: #{String.slice(output, 0, 100)}"}
-        end
+
+        {output, _code} ->
+          if String.starts_with?(String.trim(output), "{") or
+             String.starts_with?(String.trim(output), "[") do
+            Logger.debug("ast-grep exited non-zero but produced output: #{String.slice(output, 0, 100)}")
+            {:ok, output}
+          else
+            Logger.debug("ast-grep failed for #{lang_str}: #{String.slice(output, 0, 200)}")
+            {:error, "ast-grep parse error: #{String.slice(output, 0, 100)}"}
+          end
+      end
+    after
+      File.rm(tmp)
     end
   rescue
     e in ErlangError ->
-      # ast-grep not installed
       Logger.error("ast-grep not found: #{inspect(e)}")
       {:error, "ast-grep CLI not found. Install with: npm install -g @ast-grep/cli"}
   end
