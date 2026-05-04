@@ -11,7 +11,9 @@ defmodule Mosaic.Application do
 
   def start(_type, _args) do
     Logger.info("Starting MosaicDB")
-    IO.inspect(Application.get_all_env(:mosaic), label: "All config")
+    if !Mosaic.Config.get(:startup_quiet) do
+      IO.inspect(Application.get_all_env(:mosaic), label: "All config")
+    end
 
     children = [
       # Cluster coordination
@@ -51,7 +53,10 @@ defmodule Mosaic.Application do
         cache_ttl: Mosaic.Config.get(:query_cache_ttl_seconds),
         ranker: Mosaic.Ranking.Ranker.new(ranker_config()),
         index_strategy: Mosaic.Config.get(:index_strategy)
-      ] |> IO.inspect(label: "QueryEngine child spec opts")},
+      ] |> then(fn opts ->
+        if !Mosaic.Config.get(:startup_quiet), do: IO.inspect(opts, label: "QueryEngine child spec opts")
+        opts
+      end)},
 
       # WARM PATH: Analytics engine (DuckDB)
       {Mosaic.DuckDBBridge, []},
@@ -71,6 +76,12 @@ defmodule Mosaic.Application do
       # API
       {Plug.Cowboy, scheme: :http, plug: Mosaic.API, options: [port: port()]}
     ]
+
+    children = if Mosaic.Config.get(:mcp_enabled) do
+      children ++ [{Mosaic.MCP.Server, []}]
+    else
+      children
+    end
 
     configure_nx_backend()
     Supervisor.start_link(children, strategy: :one_for_one, name: Mosaic.Supervisor)
@@ -142,7 +153,9 @@ defmodule Mosaic.Application do
 
   defp index_strategy_child_spec do
     strategy_name = Mosaic.Config.get(:index_strategy)
-    IO.inspect(strategy_name, label: "index_strategy_child_spec: strategy_name")
+    if !Mosaic.Config.get(:startup_quiet) do
+      IO.inspect(strategy_name, label: "index_strategy_child_spec: strategy_name")
+    end
     strategy_module = case strategy_name do
       "binary" -> Mosaic.Index.Strategy.Binary
       "centroid" -> Mosaic.Index.Strategy.Centroid
