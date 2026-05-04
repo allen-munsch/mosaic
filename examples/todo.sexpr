@@ -1,0 +1,35 @@
+;; ── Todo App — S-Expression Component DSL ──────────────────────
+;; bin/mosaic reify examples/todo.sexpr react|vue|html
+;; bin/mosaic dev examples/
+
+(page
+  (header :bg blue-600 :padding 1rem
+    (h1 :color white :font bold :font-size xl "MosaicDB Todo")
+    (text :color blue-100 "Reified from S-Expression DSL"))
+
+  (main :max-width 600px :margin-x auto :padding 2rem
+
+    (section
+      (card :padding 1.5rem :shadow md :radius lg
+        (form :on-submit handleAddTodo
+          (input :type text :placeholder "What needs to be done?"
+            :value newTodo :on-change handleInputChange
+            :class "flex-1 px-3 py-2 border rounded-md text-gray-700")
+          (button :type submit :variant primary :size md :on-click handleAddTodo
+            (text "Add"))))
+
+      (section :margin-top 1.5rem
+        (tabs
+          (tab :variant primary :on-click showAll (text "All"))
+          (tab :variant default :on-click showActive (text "Active"))
+          (tab :variant default :on-click showCompleted (text "Completed"))))
+
+      (section :margin-top 1.5rem :id "todo-list"
+        (card :padding 2rem :bg gray-50 :text-align center
+          (text :color gray-500 :font-size lg "No todos yet. Add one above!")))))
+
+  (footer :margin-top 2rem :padding-top 1rem :border-top true
+    (section
+      (text :font-size sm :color gray-500 "0 items left")
+      (button :variant ghost :size sm :color red-500 :on-click clearCompleted
+        (text "Clear completed")))))

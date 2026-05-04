@@ -38,11 +38,15 @@ defmodule Mosaic.QueryEngine do
   end
 
   def init(opts) do
-    IO.inspect(opts, label: "QueryEngine init received opts")
-    IO.inspect(Keyword.get(opts, :index_strategy), label: "index_strategy from opts")
+    if !Mosaic.Config.get(:startup_quiet) do
+      IO.inspect(opts, label: "QueryEngine init received opts")
+      IO.inspect(Keyword.get(opts, :index_strategy), label: "index_strategy from opts")
+    end
 
     strategy_module = Keyword.get(opts, :index_strategy, "binary")
-    IO.inspect(strategy_module, label: "strategy_module resolved")
+    if !Mosaic.Config.get(:startup_quiet) do
+      IO.inspect(strategy_module, label: "strategy_module resolved")
+    end
     cache_impl = Keyword.get(opts, :cache, Mosaic.Cache.ETS)
     cache_name = Keyword.get(opts, :cache_name, cache_impl)
     cache_ttl = Keyword.get(opts, :cache_ttl, 300)

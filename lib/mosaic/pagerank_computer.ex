@@ -1,6 +1,6 @@
 defmodule Mosaic.PageRankComputer do
   use GenServer
-  require Logger
+
 
   @compute_interval :timer.hours(24)
 

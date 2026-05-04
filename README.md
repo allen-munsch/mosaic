@@ -2,710 +2,496 @@
 
 <img src="docs/mosaicdb-logo-orange.jpg" alt="MosaicDB Logo" width="350">
 
-### **A Distributed, Federated Semantic Search Engine**
+### **A Federated SQL Semantic Search & Analytics Engine**
 
-**Powered by SQLite shards, DuckDB analytics, and an Elixir/Erlang control plane.**
+**SQLite shards + DuckDB analytics + Elixir/Erlang control plane. Now with a property graph, RAG pipeline, and MCP server.**
 
-MosaicDB is an experimental federated search and analytics engine that performs **hybrid semantic search (vector + metadata)** across many **immutable SQLite shard files**. Each shard stores embeddings, metadata, ranking signals, and document text — forming a lightweight, edge-friendly node in a distributed system.
-
-Elixir acts as the **coordinator and control plane**, orchestrating fan-out queries, retries, merges, caching, ranking, and analytics.
+MosaicDB performs **hybrid semantic search (vector + metadata)** across many **immutable SQLite shard files**, with **DuckDB** for cross-shard SQL analytics. A built-in **property graph** enables recursive CTE traversals for code and knowledge graph exploration. The **RAG pipeline** ingests PDFs, DOCX, Markdown, HTML, and plain text with 5 chunking strategies. An **MCP server** exposes everything to LLM agents (Claude, Cursor, Matryoshka).
 
 ---
 
-# **Core Capabilities**
+## Architecture
 
-### **Search & Ranking**
-
-* Vector similarity search via `sqlite-vec`
-* Metadata-aware filtering (SQL)
-* Hybrid ranking: **BM25 + vector fusion**
-* Additional signals: freshness, PageRank, etc.
-* Cross-encoder / LLM reranking
-
-### **Distributed Architecture**
-
-* Federated search across many SQLite shards
-* Elixir/Erlang supervision trees for fault tolerance
-* Distributed shard routing, retries, and fan-in merge
-* Optional GPU-accelerated embeddings
-* Lightweight: a “node” = a single SQLite file
-
-### **Hierarchical Retrieval**
-
-*(Experimental branch)*
-
-* Multi-level chunking: **document → paragraph → sentence**
-* Cross-level navigation
-* Context expansion
-* Multi-resolution embeddings
-
-### **Analytics**
-
-* **DuckDB warm path** for SQL analytics across shards
-* Window functions, joins, aggregations
-* Works alongside low-latency Hot Path vector search
-
-### **Caching & Observability**
-
-* LRU embedding cache (ETS / Redis)
-* Query caches
-* Prometheus / Grafana metrics
-* Health checks + introspection endpoints
-
----
-
-# **Why SQLite + Elixir?**
-
-Elixir provides the ideal **distributed coordination layer**:
-
-**Concurrency for fan-out queries**
-Each shard search runs as an isolated BEAM process — no locks, no thread pools.
-
-**Supervisor-based fault tolerance**
-Shard failures, timeouts, or panics self-heal automatically.
-
-**Predictable under heavy load**
-The BEAM scheduler prevents slow shards from blocking others.
-
-**Built-in clustering**
-Elixir nodes auto-discover and form a distributed topology without Zookeeper, Consul, etc.
-
-**Functional pipelines**
-Query planning, merging, and ranking are implemented cleanly using pattern matching and pipelines.
-
-**Observability**
-Telemetry, tracing, LiveDashboard, and metrics built-in.
-
-**In short:**
-**Elixir is the resilient, concurrent control plane around fast SQLite shards.**
-
----
-
-# **Feature Comparison**
-
-| Feature         | PostgreSQL        | Pinecone      | Weaviate      | **MosaicDB** (SQLite Shards) |
-| --------------- | ----------------- | ------------- | ------------- | ---------------------------- |
-| SQL support     | Yes               | No            | No            | **Yes (SQLite + DuckDB)**    |
-| Vector search   | pgvector required | Yes           | Yes           | **Yes (sqlite-vec)**         |
-| Distribution    | Manual            | Managed       | Managed       | **Built-in Elixir/Erlang**   |
-| Fault tolerance | Manual            | Cloud-managed | Cloud-managed | **Erlang supervision trees** |
-| Lightweight     | Medium            | No            | No            | **Yes: 1 shard = 1 file**    |
-| Edge-ready      | No                | No            | No            | **Yes**                      |
-
----
-
-# **Developer Pitch**
-
-MosaicDB gives you a **distributed, self-contained semantic search engine** where:
-
-* Each node is just a **SQLite file**
-* The control plane is **Erlang-grade fault tolerant**
-* Vector search, SQL metadata filtering, and analytics are first-class
-* Deployment is trivial (edge, laptop, server)
-
-It’s **SQLite simplicity + Erlang reliability** — with semantic search, ranking, and analytics built in.
-
----
-
-# **Performance Summary**
-
-### **CPU**
-
-* Batch ingest: ~157ms/doc
-* Cold search (embed + search): 700–750ms
-* Hot search (cached): **8–16ms**
-* Parallel throughput: **10 queries in 23ms**
-
-### **GPU (CUDA)**
-
-* Batch ingest: ~57ms/doc
-* Cold search: 150–160ms
-* Hot search: **13–16ms**
-* Parallel throughput: **10 queries in 17ms**
-
----
-
-# **Quick Start**
-
-### CPU
-
-```bash
-docker compose up --build
+```
+                         ┌─────────────────────────────────┐
+                         │       Query (SQL or natural)     │
+                         └──────────────┬──────────────────┘
+                                        │
+           ┌────────────────────────────┼────────────────────────────┐
+           ▼                            ▼                            ▼
+    ┌─────────────┐            ┌─────────────┐            ┌─────────────┐
+    │ Shard Router │            │  Embedding  │            │  Cache       │
+    │ centroid +   │            │  Service    │            │  ETS/Redis   │
+    │ bloom filter │            │  Bumblebee  │            │  LRU         │
+    └──────┬──────┘            └──────┬──────┘            └──────┬──────┘
+           │                          │                          │
+           └──────────────────────────┼──────────────────────────┘
+                                      │
+                     ┌────────────────┴────────────────┐
+                     ▼                                 ▼
+           ┌──────────────────┐              ┌──────────────────┐
+           │   HOT PATH        │              │   WARM PATH       │
+           │   SQLite shards   │              │   DuckDB          │
+           │   + sqlite-vec    │              │   Federated SQL   │
+           │   < 50ms          │              │   < 500ms         │
+           └──────────────────┘              └──────────────────┘
 ```
 
-### GPU (CUDA)
+---
+
+## Quick Start
 
 ```bash
-docker compose -f docker-compose.cuda.yml up -d --build
+git clone https://github.com/allen-munsch/mosaic.git
+cd mosaic
+mix deps.get && mix compile
+
+# Run the demo
+make demo
+
+# Or use the CLI directly
+bin/mosaic help
+bin/mosaic demo
 ```
+
+---
+
+## CLI — Universal Ingestor
+
+```bash
+# Code ingestion
+bin/mosaic ingest lib/                  # Parse & index codebase into graph
+
+# Document ingestion (RAG)
+bin/mosaic docs ~/kb/articles/          # Chunk PDFs, DOCX, MD, TXT, HTML
+
+# Search
+bin/mosaic search "error handling"      # Text search across indexed code
+
+# Graph traversal
+bin/mosaic traverse execute_query callees
+bin/mosaic report                       # Graph analysis: god nodes, communities
+
+# RAG retrieval
+bin/mosaic rag "authentication flow"    # Semantic + keyword retrieval
+bin/mosaic rag-hybrid "deployment"      # Vector + keyword hybrid
+
+# Servers
+bin/mosaic server                       # HTTP API on :4040 + MCP on /mcp
+bin/mosaic mcp                          # MCP stdio (Claude/Cursor/Matryoshka)
+```
+
+---
+
+## Core Capabilities
+
+### Federated Semantic Search (Hot Path)
+
+Vector similarity search via `sqlite-vec` with centroid-based shard routing and bloom filter pre-filtering. Fan-out to relevant shards, merge, and re-rank.
+
+```elixir
+# Vector search
+Mosaic.QueryRouter.execute("machine learning", [],
+  force_engine: :vector_search)
+
+# Hybrid: vector + SQL filter
+Mosaic.HybridQuery.search("premium quality",
+  where: "category = 'electronics' AND rating >= 4",
+  limit: 20)
+```
+
+**Performance**: Hot queries 8-16ms | 10 parallel queries in 23ms
+
+### DuckDB Federated Analytics (Warm Path)
+
+Full SQL with window functions, joins, and aggregations across all shards:
+
+```elixir
+Mosaic.DuckDBBridge.query("""
+  SELECT metadata->>'category' as category,
+         COUNT(*) as count,
+         AVG(CAST(metadata->>'price' AS FLOAT)) as avg_price
+  FROM documents
+  GROUP BY category
+  ORDER BY count DESC
+""")
+```
+
+### Property Graph Database
+
+Recursive CTE traversals across federated SQLite shards:
+
+```elixir
+Mosaic.Graph.Traversal.callers("execute_query", depth: 2)
+Mosaic.Graph.Traversal.callees("MyModule", depth: 1)
+Mosaic.Graph.Traversal.ancestors("BaseClass")        # inheritance chain
+Mosaic.Graph.Traversal.neighborhood("my_func", 2)     # BFS subgraph
+Mosaic.Graph.Traversal.god_nodes(10)                  # highest-degree hubs
+```
+
+### Matryoshka Cascaded Vector Search
+
+Progressive refinement across dimension levels for 10-50x speedup:
+
+```
+64d coarse scan → vec_nodes_64  → wide recall
+128d re-rank    → vec_nodes_128 → prune
+256d re-rank    → vec_nodes_256 → narrow
+384d final      → vec_nodes_384 → top-K returned
+```
+
+### RAG Pipeline
+
+5 chunking strategies with keyword + vector retrieval:
+
+| Strategy | Best For |
+|----------|----------|
+| `:paragraph` | Prose, articles, reports |
+| `:sentence` | Long-form with precise retrieval |
+| `:fixed` | Uniform-sized chunks with overlap |
+| `:markdown` | Structured docs (heading hierarchy preserved) |
+| `:sliding` | Maximum recall with overlapping windows |
+
+```elixir
+Mosaic.RAG.Pipeline.retrieve("What is the auth flow?", top_k: 5)
+# → %{chunks: [...], context: "assembled text for LLM", token_count: 1250}
+```
+
+### Beyond Chunking: RLM Integration
+
+Traditional RAG splits documents into fixed chunks, losing context at boundaries. **Recursive Language Models (RLM)**, as implemented by [Matryoshka](https://github.com/yogthos/Matryoshka), take a different approach:
+
+- The LLM **reasons about the query** and outputs symbolic commands (Nucleus S-expressions)
+- A logic engine (Lattice, backed by miniKanren) **executes those commands** against the full document
+- Results stay **server-side** as handle stubs — the LLM sees compact references, not full arrays
+- **No chunking heuristics, no lost context, no embedding models required**
+
+```
+Traditional RAG:   chunk → embed → vector search → retrieve chunks → assemble
+RLM via MosaicDB:  LLM → Nucleus commands → (grep "auth") → (filter ...) → (count ...) → expand handles
+```
+
+MosaicDB supports **both** approaches. Use chunking for fast keyword/vector retrieval. Use RLM (via Matryoshka's `lattice-mcp` + MosaicDB's `mosaic_*` MCP tools) when you need the LLM to reason across full documents without context-window limits.
+
+### Handle Registry — Extreme Compression
+
+Results stored as compact stubs, materialized on demand:
+
+```
+Full array:   15,000 tokens for 1,000 results
+Handle stub:  $grep_error: Array(1000) [preview...]  → ~50 tokens
+Savings:      99.7%
+```
+
+```elixir
+stub = Mosaic.HandleRegistry.store("$search_results", data)
+# → "$search_results: Array(500) [preview...]"
+
+Mosaic.HandleRegistry.expand("$search_results", limit: 5, offset: 10)
+# → Items 11-15
+```
+
+### Index Strategies
+
+Pluggable with 6 strategies — configurable at runtime:
+
+| Strategy | Best For |
+|----------|----------|
+| **HNSW** | High-recall logarithmic search |
+| **IVF** | Large-scale with clustering |
+| **PQ** | Compressed vectors, memory-efficient |
+| **Binary** | XOR + POPCNT for binary embeddings |
+| **Centroid** | Shard-level distributed routing |
+| **Quantized** | Scalar quantization with hierarchical cells |
+
+### Ranking & Fusion
+
+Multi-signal ranking with configurable scorers:
+
+- **Vector similarity** — cosine distance
+- **BM25** — lexical relevance scoring
+- **PageRank** — link authority
+- **Freshness** — time-decay weighting
+- **Fusion**: weighted sum, Reciprocal Rank Fusion (RRF), max
+
+### Fault Tolerance
+
+- Erlang/OTP supervision trees — shard failures self-heal
+- Circuit breaker per shard — failed shards excluded, partial results returned
+- Immutable shards — no corruption from concurrent writes
+- WAL mode, connection pooling, health checks
+
+---
+
+## MCP Server — LLM Agent Integration
+
+9 tools exposed via stdio and HTTP:
+
+```json
+{
+  "mcpServers": {
+    "mosaic": {
+      "command": "bin/mosaic",
+      "args": ["mcp"],
+      "cwd": "/path/to/mosaic"
+    }
+  }
+}
+```
+
+| Tool | Description |
+|------|-------------|
+| `mosaic_load` | Index files, directories, or repos |
+| `mosaic_traverse` | Navigate graph (callers, callees, ancestors, descendants, neighborhood) |
+| `mosaic_search` | Semantic vector search |
+| `mosaic_expand` | Materialize handle stubs with pagination |
+| `mosaic_memo` / `mosaic_memo_delete` | Persistent cross-session context |
+| `mosaic_status` | Indexing stats and shard topology |
+| `mosaic_analytics` | DuckDB SQL across federated shards |
+| `mosaic_graph_report` | God nodes, bridge nodes, communities, questions |
+
+---
+
+## Demo Output
+
+```
+    __  ___                _      ____  ____
+   /  |/  /___  _________ (_)____/ __ \/ __ )
+  / /|_/ / __ \/ ___/ __ `/ / ___/ / / / __  |
+ / /  / / /_/ (__  ) /_/ / / /__/ /_/ / /_/ /
+/_/  /_/\____/____/\__,_/_/\___/_____/_____/
+
+  Federated Code Graph + Semantic Search
+  SQLite shards │ AST extraction │ Graph traversal │ MCP server
+
+━━━ 1. CREATING DEMO GRAPH ━━━
+  Created 12 nodes, 12 edges
+  Call chain: API.search_handler → QueryEngine.execute_query
+              → QueryEngine.orchestrate_query → Traversal.callers/callees
+  Cross-module: CascadedSearch.search → QueryEngine.execute_query
+
+━━━ 2. GRAPH STATUS ━━━
+  Nodes: 12 (function: 7, module: 5)
+  Edges: 12 (contains: 7, calls: 5)
+
+━━━ 3. GRAPH TRAVERSAL ━━━
+  callees of execute_query (depth=2):
+    [1] orchestrate_query (function)
+    [2] callees (function) — lib/mosaic/graph/traversal.ex
+    [2] callers (function) — lib/mosaic/graph/traversal.ex
+
+  neighborhood of execute_query (depth=1):
+    Center: execute_query — Nodes: 5, Edges: 5
+
+━━━ 4. HANDLE REGISTRY ━━━
+  Stored 500 results → stub: $demo_search_results: Array(500) [...]
+  Token savings: ~15K tokens → ~50 tokens (99.7% reduction)
+
+━━━ 5. GRAPH ANALYSIS ━━━
+  God Nodes: execute_query (degree 4), Mosaic.API (degree 2), ...
+
+━━━ 6. MCP TOOLS ━━━
+  9 tools: mosaic_load, mosaic_traverse, mosaic_search,
+           mosaic_expand, mosaic_memo, mosaic_memo_delete,
+           mosaic_status, mosaic_analytics, mosaic_graph_report
+```
+
+---
+
+## API
 
 ### Health
 
 ```bash
-curl http://localhost/health
+curl http://localhost:4040/health
 ```
 
----
-
-# **API**
-
-### Health
+### Semantic Search
 
 ```bash
-curl http://localhost/health
-```
-
-### Search
-
-```bash
-curl -X POST http://localhost/api/search \
+curl -X POST http://localhost:4040/api/search \
   -H "Content-Type: application/json" \
-  -d '{"query": "test"}'
+  -d '{"query": "error handling in GenServer"}'
+```
+
+### Hybrid Search (Vector + SQL Filter)
+
+```bash
+curl -X POST http://localhost:4040/api/search/hybrid \
+  -H "Content-Type: application/json" \
+  -d '{"query": "premium quality", "where": "category = \"electronics\"", "limit": 10}'
+```
+
+### Federated SQL Analytics (DuckDB)
+
+```bash
+curl -X POST http://localhost:4040/api/analytics \
+  -H "Content-Type: application/json" \
+  -d '{"sql": "SELECT category, COUNT(*) as cnt FROM documents GROUP BY category ORDER BY cnt DESC"}'
+```
+
+### MCP Endpoint
+
+```bash
+# Server info
+curl http://localhost:4040/mcp
+
+# Tool list
+curl -X POST http://localhost:4040/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+
+# Call a tool
+curl -X POST http://localhost:4040/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"mosaic_status","arguments":{}}}'
 ```
 
 ---
 
-# **Load Testing**
+## Performance
 
-### CPU
+**Test system:** 13th Gen Intel Core i9-13900H (20 cores), 62GB RAM, NVIDIA RTX 3050 (4GB)
 
-```bash
-docker compose up --build
-docker compose --profile load-test run --rm k6 run k6_tests/load_test.js
+| Operation | CPU | GPU (CUDA 12 + cuDNN) |
+|-----------|-----|----------------------|
+| Batch ingest (10 docs) | 710ms/doc | ~57ms/doc |
+| Cold search (embed + search) | 620-990ms | ~150-160ms |
+| Hot search (cached embedding) | **7-13ms** | **13-16ms** |
+| Parallel throughput (10 queries) | 636ms (63ms avg) | ~17ms |
+| DuckDB analytics | 10-50ms | 10-50ms |
+| Cache speedup | 44x-83x faster | 8x-10x faster |
+
+> **GPU mode** requires CUDA 12 toolkit + cuDNN. Set `XLA_TARGET=cuda12` and `nx_client: "cuda"` in config. The Dockerfile.cuda provides a pre-built GPU container.
+
+<details>
+<summary><b>📊 Full Demo Output (CPU)</b></summary>
+
+```
+    __  ___                _      ____  ____
+   /  |/  /___  _________ (_)____/ __ \/ __ )
+  / /|_/ / __ \/ ___/ __ `/ / ___/ / / / __  |
+ / /  / / /_/ (__  ) /_/ / / /__/ /_/ / /_/ /
+/_/  /_/\____/____/\__,_/_/\___/_____/_____/
+
+Federated Semantic Search + Analytics Engine
+SQLite + sqlite-vec │ DuckDB │ Local GPU Embeddings
+
+━━━ 1. SYSTEM STATUS ━━━
+  Health check: ok  ✓ 11ms (HTTP 200)
+  Metrics: {cache_misses: 0, cache_hits: 0, shard_count: 1}  ✓ 10ms
+
+━━━ 2. DOCUMENT INGESTION ━━━
+  Indexed 10 product reviews with GPU-accelerated embeddings
+  ✓ 7104ms total (710ms/doc)
+
+━━━ 3. SEMANTIC SEARCH - Cold vs Hot ━━━
+  Query: "comfortable for long work sessions"
+    {"id":"book_001","similarity":0.78}
+    {"id":"home_001","similarity":0.76}
+    COLD (embed + search): 670ms
+    HOT  (cached search):  7ms  (83x faster)
+
+  Query: "good morning drink with complex taste"
+    {"id":"prod_003","similarity":0.77}
+    {"id":"food_001","similarity":0.77}
+    COLD: 623ms → HOT: 13ms (44x faster)
+
+  Query: "high performance computing device"
+    {"id":"prod_002","similarity":0.78}
+    {"id":"prod_001","similarity":0.77}
+    COLD: 990ms → HOT: 12ms (76x faster)
+
+━━━ 4. HYBRID SEARCH - Vector + SQL Filter ━━━
+  Query: "premium quality WHERE category='electronics'"
+    {"id":"prod_002","similarity":0.78,"category":"electronics"}
+    {"id":"prod_001","similarity":0.74,"category":"electronics"}
+    COLD: 710ms → HOT: 14ms
+
+  Query: "highly recommended WHERE rating >= 5"
+    {"id":"book_001","similarity":0.82,"category":"books"}
+    {"id":"prod_001","similarity":0.78,"category":"electronics"}
+    COLD: 740ms → HOT: 13ms
+
+━━━ 5. ANALYTICS (DuckDB Warm Path) ━━━
+  Document count: [[10]]  ✓ 28ms
+  Category breakdown: [["electronics",3],["food",2],...]  ✓ 3300ms
+  Price range by category: [["home",899.99],...]  ✓ 1300ms
+
+━━━ 6. SHARD TOPOLOGY ━━━
+  Active shards: 3 (2 data + 1 demo graph)  ✓ 6ms
+
+━━━ 7. THROUGHPUT TEST ━━━
+  10 parallel searches with warm cache
+  ✓ 10 queries in 636ms (63ms avg per query)
+
+━━━ 8. FINAL METRICS ━━━
+  {cache_misses: 15, cache_hits: 23, shard_count: 3}  ✓ 12ms
+
+    COLD query (embedding gen):  ~620-990ms
+    HOT  query (cached):        ~7-13ms
+    Analytics (DuckDB):         ~10-50ms
+    Batch ingest:               ~710ms/doc
+
+    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+    │   Query     │───▶│  Embedding  │───▶│   Cache     │
+    │             │    │  (GPU/CPU)  │    │   (ETS)     │
+    └─────────────┘    └─────────────┘    └──────┬──────┘
+                                                 │
+         ┌───────────────────────────────────────┴───┐
+         ▼                                           ▼
+    ┌─────────────┐                          ┌─────────────┐
+    │  sqlite-vec │  HOT PATH  (<15ms)       │   DuckDB    │
+    │   (search)  │                          │ (analytics) │
+    └─────────────┘                          └─────────────┘
 ```
 
-### GPU
-
-```bash
-docker compose -f docker-compose.cuda.yml up -d
-docker compose -f docker-compose.cuda.yml --profile load-test run --rm k6 run k6_tests/load_test.js
-```
+</details>
 
 ---
 
-# **Development**
+## Why SQLite + Elixir?
 
-Install deps:
+**Elixir/Erlang** provides the distributed coordination layer:
+
+- **Concurrent fan-out**: each shard search runs as an isolated BEAM process
+- **Supervisor-based fault tolerance**: shard failures and timeouts self-heal
+- **Predictable under load**: BEAM scheduler prevents slow shards from blocking
+- **Built-in clustering**: libcluster for auto-discovery without Zookeeper/Consul
+- **Observability**: Telemetry, LiveDashboard, Prometheus metrics built in
+
+**SQLite** provides the storage layer:
+
+- **One file per shard**: trivially portable, backupable, cacheable
+- **sqlite-vec**: vector similarity with SIMD acceleration
+- **Immutable shards**: write once, read many — no write contention
+- **Zero operational overhead**: no separate database server to manage
+
+---
+
+## Development
 
 ```bash
 mix deps.get
-```
+mix compile
+mix test                    # 203 tests, 0 failures
 
-Run system:
+# Run specific tests
+mix test test/mosaic/graph/
+mix test test/mosaic/mcp/
 
-```bash
-mix run --no-halt
+# Interactive
+make iex
+
+# Demo
+make demo
+make index
+make traverse
+make graph-report
 ```
 
 ---
 
-# **Appendix: Demo Outputs**
-
-```
-CPU: 13th Gen Intel(R) Core(TM) i9-13900H
-Cores: 20
-RAM: 62Gi
-Architecture:                            x86_64
-GPU: NVIDIA GeForce RTX 3050 vram 4GB
-```
-
-
-**CPU Demo Output**
-
-<details>
-<summary>Click to expand</summary>
-
-
-```
-    __  ___                _      ____  ____ 
-   /  |/  /___  _________ (_)____/ __ \/ __ )
-  / /|_/ / __ \/ ___/ __ `/ / ___/ / / / __  |
- / /  / / /_/ (__  ) /_/ / / /__/ /_/ / /_/ / 
-/_/  /_/\____/____/\__,_/_/\___/_____/_____/  
-                                              
-
-Federated Semantic Search + Analytics Engine
-SQLite + sqlite-vec │ DuckDB │ Local GPU Embeddings
-
-Legend: COLD = embedding generation + search
-        HOT  = cached embedding, search only
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  1. SYSTEM STATUS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-▸ Health check...
-ok
-  ✓ 21ms (HTTP 200)
-
-▸ Current metrics...
-{
-  "cache_misses": 0,
-  "cache_hits": 0,
-  "duckdb_shards": 0,
-  "shard_count": 0
-}
-  ✓ 8ms (HTTP 200)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  2. DOCUMENT INGESTION (Batch Embedding)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-▸ Indexing 10 product reviews with GPU-accelerated embeddings...
-{
-  "doc_count": 10,
-  "shard_id": "shard_1764469383724_665",
-  "shard_path": "/tmp/mosaic/shards/shard_1764469383724_665.db"
-}
-  ✓ 1757ms total (175ms/doc for embedding + storage)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  3. SEMANTIC SEARCH - Cold vs Hot
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Watch the speedup when embeddings are cached...
-
-▸ Query: 'comfortable for long work sessions'
-  Demonstrating embedding cache effect...
-{"id":"book_001","similarity":0.78,"text":"A masterpiece of science fiction. The world-building is intr"}
-{"id":"home_001","similarity":0.76,"text":"Memory foam mattress that sleeps cool. Gel-infused layer pre"}
-  COLD (embed + search): 742ms
-  HOT  (cached search):  14ms (49x faster)
-
-▸ Query: 'good morning drink with complex taste'
-  Demonstrating embedding cache effect...
-{"id":"prod_003","similarity":0.77,"text":"Best espresso machine for home use. Pulls shots comparable t"}
-{"id":"food_001","similarity":0.77,"text":"Single-origin Ethiopian coffee with bright fruity notes. Hin"}
-  COLD (embed + search): 749ms
-  HOT  (cached search):  8ms (83x faster)
-
-▸ Query: 'high performance computing device'
-  Demonstrating embedding cache effect...
-{"id":"prod_002","similarity":0.78,"text":"Disappointed with battery life on this laptop. Barely lasts "}
-{"id":"prod_001","similarity":0.77,"text":"This wireless mechanical keyboard has incredible tactile fee"}
-  COLD (embed + search): 692ms
-  HOT  (cached search):  19ms (34x faster)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  4. HYBRID SEARCH - Vector + SQL Filter
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Semantic similarity constrained by metadata...
-
-▸ Query: 'premium quality WHERE category='electronics''
-  Vector similarity + SQL filter...
-{"id":"prod_002","similarity":0.78,"category":"electronics"}
-{"id":"prod_001","similarity":0.74,"category":"electronics"}
-  COLD: 730ms  →  HOT: 11ms (60x faster)
-
-▸ Query: 'highly recommended WHERE rating >= 5'
-  Vector similarity + SQL filter...
-{"id":"book_001","similarity":0.82,"category":"books"}
-{"id":"prod_001","similarity":0.78,"category":"electronics"}
-  COLD: 761ms  →  HOT: 11ms (63x faster)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  5. ANALYTICS (DuckDB Warm Path)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Complex aggregations federated across shards...
-
-▸ Document count
-{
-  "path": "warm",
-  "engine": "duckdb",
-  "results": [
-    [
-      10
-    ]
-  ]
-}
-  ✓ 27ms (HTTP 200)
-
-▸ Category breakdown
-{
-  "path": "warm",
-  "engine": "duckdb",
-  "results": [
-    [
-      "\"electronics\"",
-      3
-    ],
-    [
-      "\"food\"",
-      2
-    ],
-    [
-      "\"books\"",
-      2
-    ],
-    [
-      "\"sports\"",
-      1
-    ],
-    [
-      "\"home\"",
-      1
-    ],
-    [
-      "\"appliances\"",
-      1
-    ]
-  ]
-}
-  ✓ 3300ms (HTTP 200)
-
-▸ Price range by category
-{
-  "path": "warm",
-  "engine": "duckdb",
-  "results": [
-    [
-      "\"home\"",
-      899.99
-    ],
-    [
-      "\"food\"",
-      15.99
-    ],
-    [
-      "\"electronics\"",
-      609.99
-    ],
-    [
-      "\"appliances\"",
-      699.99
-    ],
-    [
-      "\"sports\"",
-      249.99
-    ],
-    [
-      "\"books\"",
-      37.49
-    ]
-  ]
-}
-  ✓ 1303ms (HTTP 200)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  6. SHARD TOPOLOGY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-▸ Active shards...
-{
-  "count": 1,
-  "shards": [
-    {
-      "id": "shard_1764469383724_665",
-      "path": "/tmp/mosaic/shards/shard_1764469383724_665.db",
-      "doc_count": 10,
-      "query_count": 0
-    }
-  ]
-}
-  ✓ 7ms (HTTP 200)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  7. THROUGHPUT TEST - Cached Queries
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-10 parallel searches with warm cache...
-  Pre-warming cache...
-  Running 10 parallel queries...
-  ✓ 10 queries in 15ms (1ms avg per query)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  8. FINAL METRICS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-▸ Cache statistics...
-{
-  "cache_misses": 15,
-  "cache_hits": 15,
-  "duckdb_shards": 1,
-  "shard_count": 1
-}
-  ✓ 6ms (HTTP 200)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                         DEMO COMPLETE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  MosaicDB Performance Profile:
-
-    COLD query (embedding gen):  ~800-1500ms
-    HOT  query (cached):        ~2-15ms
-    Analytics (DuckDB):       ~10-50ms
-    Batch ingest:             ~175ms/doc
-
-  Architecture:
-
-    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-    │   Query     │───▶│  Embedding  │───▶│   Cache     │
-    │             │    │  (GPU/CPU)  │    │   (ETS)     │
-    └─────────────┘    └─────────────┘    └──────┬──────┘
-                                                 │
-         ┌───────────────────────────────────────┴───┐
-         ▼                                           ▼
-    ┌─────────────┐                          ┌─────────────┐
-    │  sqlite-vec │  HOT PATH  (<15ms)       │   DuckDB    │
-    │   (search)  │                          │ (analytics) │
-    └─────────────┘                          └─────────────┘
-
-```
-
-</details>
-
-
-**GPU Demo Output**
-
-<details>
-<summary>Click to expand</summary>
-
-```
-    __  ___                _      ____  ____ 
-   /  |/  /___  _________ (_)____/ __ \/ __ )
-  / /|_/ / __ \/ ___/ __ `/ / ___/ / / / __  |
- / /  / / /_/ (__  ) /_/ / / /__/ /_/ / /_/ / 
-/_/  /_/\____/____/\__,_/_/\___/_____/_____/  
-                                              
-
-Federated Semantic Search + Analytics Engine
-SQLite + sqlite-vec │ DuckDB │ Local GPU Embeddings
-
-Legend: COLD = embedding generation + search
-        HOT  = cached embedding, search only
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  1. SYSTEM STATUS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-▸ Health check...
-ok
-  ✓ 12ms (HTTP 200)
-
-▸ Current metrics...
-{
-  "cache_misses": 0,
-  "cache_hits": 0,
-  "duckdb_shards": 0,
-  "shard_count": 0
-}
-  ✓ 8ms (HTTP 200)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  2. DOCUMENT INGESTION (Batch Embedding)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-▸ Indexing 10 product reviews with GPU-accelerated embeddings...
-{
-  "doc_count": 10,
-  "shard_id": "shard_1764468890804_244",
-  "shard_path": "/tmp/mosaic/shards/shard_1764468890804_244.db"
-}
-  ✓ 574ms total (57ms/doc for embedding + storage)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  3. SEMANTIC SEARCH - Cold vs Hot
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Watch the speedup when embeddings are cached...
-
-▸ Query: 'comfortable for long work sessions'
-  Demonstrating embedding cache effect...
-{"id":"book_001","similarity":0.78,"text":"A masterpiece of science fiction. The world-building is intr"}
-{"id":"home_001","similarity":0.76,"text":"Memory foam mattress that sleeps cool. Gel-infused layer pre"}
-  COLD (embed + search): 157ms
-  HOT  (cached search):  15ms (9x faster)
-
-▸ Query: 'good morning drink with complex taste'
-  Demonstrating embedding cache effect...
-{"id":"prod_003","similarity":0.77,"text":"Best espresso machine for home use. Pulls shots comparable t"}
-{"id":"food_001","similarity":0.77,"text":"Single-origin Ethiopian coffee with bright fruity notes. Hin"}
-  COLD (embed + search): 153ms
-  HOT  (cached search):  14ms (10x faster)
-
-▸ Query: 'high performance computing device'
-  Demonstrating embedding cache effect...
-{"id":"prod_002","similarity":0.78,"text":"Disappointed with battery life on this laptop. Barely lasts "}
-{"id":"prod_001","similarity":0.77,"text":"This wireless mechanical keyboard has incredible tactile fee"}
-  COLD (embed + search): 152ms
-  HOT  (cached search):  16ms (8x faster)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  4. HYBRID SEARCH - Vector + SQL Filter
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Semantic similarity constrained by metadata...
-
-▸ Query: 'premium quality WHERE category='electronics''
-  Vector similarity + SQL filter...
-{"id":"prod_002","similarity":0.78,"category":"electronics"}
-{"id":"prod_001","similarity":0.74,"category":"electronics"}
-  COLD: 149ms  →  HOT: 14ms (9x faster)
-
-▸ Query: 'highly recommended WHERE rating >= 5'
-  Vector similarity + SQL filter...
-{"id":"book_001","similarity":0.82,"category":"books"}
-{"id":"prod_001","similarity":0.78,"category":"electronics"}
-  COLD: 148ms  →  HOT: 13ms (10x faster)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  5. ANALYTICS (DuckDB Warm Path)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Complex aggregations federated across shards...
-
-▸ Document count
-{
-  "path": "warm",
-  "engine": "duckdb",
-  "results": [
-    [
-      10
-    ]
-  ]
-}
-  ✓ 13ms (HTTP 200)
-
-▸ Category breakdown
-{
-  "path": "warm",
-  "engine": "duckdb",
-  "results": [
-    [
-      "\"electronics\"",
-      3
-    ],
-    [
-      "\"food\"",
-      2
-    ],
-    [
-      "\"books\"",
-      2
-    ],
-    [
-      "\"appliances\"",
-      1
-    ],
-    [
-      "\"sports\"",
-      1
-    ],
-    [
-      "\"home\"",
-      1
-    ]
-  ]
-}
-  ✓ 1749ms (HTTP 200)
-
-▸ Price range by category
-{
-  "path": "warm",
-  "engine": "duckdb",
-  "results": [
-    [
-      "\"home\"",
-      899.99
-    ],
-    [
-      "\"food\"",
-      15.99
-    ],
-    [
-      "\"sports\"",
-      249.99
-    ],
-    [
-      "\"books\"",
-      37.49
-    ],
-    [
-      "\"electronics\"",
-      609.99
-    ],
-    [
-      "\"appliances\"",
-      699.99
-    ]
-  ]
-}
-  ✓ 1046ms (HTTP 200)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  6. SHARD TOPOLOGY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-▸ Active shards...
-{
-  "count": 1,
-  "shards": [
-    {
-      "id": "shard_1764468890804_244",
-      "path": "/tmp/mosaic/shards/shard_1764468890804_244.db",
-      "doc_count": 10,
-      "query_count": 0
-    }
-  ]
-}
-  ✓ 5ms (HTTP 200)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  7. THROUGHPUT TEST - Cached Queries
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-10 parallel searches with warm cache...
-  Pre-warming cache...
-  Running 10 parallel queries...
-  ✓ 10 queries in 17ms (1ms avg per query)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  8. FINAL METRICS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-▸ Cache statistics...
-{
-  "cache_misses": 15,
-  "cache_hits": 15,
-  "duckdb_shards": 1,
-  "shard_count": 1
-}
-  ✓ 8ms (HTTP 200)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                         DEMO COMPLETE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  MosaicDB Performance Profile:
-
-    COLD query (embedding gen):  ~800-1500ms
-    HOT  query (cached):        ~2-15ms
-    Analytics (DuckDB):       ~10-50ms
-    Batch ingest:             ~57ms/doc
-
-  Architecture:
-
-    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-    │   Query     │───▶│  Embedding  │───▶│   Cache     │
-    │             │    │  (GPU/CPU)  │    │   (ETS)     │
-    └─────────────┘    └─────────────┘    └──────┬──────┘
-                                                 │
-         ┌───────────────────────────────────────┴───┐
-         ▼                                           ▼
-    ┌─────────────┐                          ┌─────────────┐
-    │  sqlite-vec │  HOT PATH  (<15ms)       │   DuckDB    │
-    │   (search)  │                          │ (analytics) │
-    └─────────────┘                          └─────────────┘
-```
-
-</details>
-
-
----
-
-# **License**
+## License
 
 MIT

@@ -43,7 +43,7 @@ defmodule Mosaic.Index.StrategyIntegrationTest do
     end
   end
 
-  defp strategy_opts(:hnsw, path), do: [base_path: path, m: 4, ef_construction: 10, ef_search: 5, dim: 64]
+  defp strategy_opts(:hnsw, path), do: [base_path: path, m: 8, ef_construction: 50, ef_search: 20, dim: 64]
   defp strategy_opts(:binary, path), do: [base_path: path, bits: 64, dim: 64]
   defp strategy_opts(:ivf, path), do: [base_path: path, n_lists: 4, n_probe: 2, training_size: 6, dim: 64]
   defp strategy_opts(:pq, path), do: [base_path: path, m: 8, k_sub: 4, training_size: 6, dim: 64]

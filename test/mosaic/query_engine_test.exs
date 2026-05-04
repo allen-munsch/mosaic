@@ -2,6 +2,8 @@ defmodule Mosaic.QueryEngineTest do
   use ExUnit.Case, async: false
   import Mosaic.TestHelpers
 
+  @moduletag :embedding
+
   setup context do
     {:ok, setup_context} = Mosaic.TestHelpers.setup_integration_test(context)
     on_exit(setup_context.on_exit)

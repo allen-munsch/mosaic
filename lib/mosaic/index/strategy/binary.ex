@@ -13,7 +13,6 @@ defmodule Mosaic.Index.Strategy.Binary do
   """
   
   @behaviour Mosaic.Index.Strategy
-  require Logger
   
   alias Mosaic.Index.Binary.Quantizer
   

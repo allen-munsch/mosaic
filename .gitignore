@@ -46,3 +46,10 @@ config/prod.secret.exs
 /assets/node_modules
 /assets/_build
 context/
+
+# Development scratch files
+code.txt
+tests.txt
+next-refactor.txt
+stressed/
+hobbes/

@@ -3,7 +3,7 @@ defmodule Mosaic.Cache.ETS do
   An ETS-based cache implementation that conforms to the `Mosaic.Cache` behaviour.
   """
   use GenServer
-  require Logger
+
 
   @behaviour Mosaic.Cache
 

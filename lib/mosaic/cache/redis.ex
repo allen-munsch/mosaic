@@ -3,7 +3,6 @@ defmodule Mosaic.Cache.Redis do
   A Redis-based cache implementation that conforms to the `Mosaic.Cache` behaviour.
   """
   use GenServer
-  require Logger
 
   @behaviour Mosaic.Cache
 

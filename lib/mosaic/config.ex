@@ -61,7 +61,38 @@ defmodule Mosaic.Config do
     ivf_n_probe: 10,
     # PQ config
     pq_m: 8,
-    pq_k_sub: 256
+    pq_k_sub: 256,
+    # ── Graph DB config ──────────────────────────────────
+    graph_enabled: true,
+    graph_shard_size: 50_000,
+    # ── Matryoshka embeddings: cascaded dimension levels ──
+    matryoshka_levels: [64, 128, 256, 384],
+    matryoshka_coarse_level: 64,
+    matryoshka_fine_level: 384,
+    matryoshka_cascade_factors: %{64 => 50, 128 => 10, 256 => 3},
+    # ── Handle registry ─────────────────────────────────
+    handle_registry_enabled: true,
+    handle_max_count: 10_000,
+    handle_default_ttl_seconds: 3600,
+    handle_preview_length: 120,
+    handle_db_path: "/tmp/mosaic/handles/handles.db",
+    # ── MCP server ──────────────────────────────────────
+    mcp_enabled: false,
+    mcp_transport: "stdio",
+    # ── AST ingestion ───────────────────────────────────
+    ast_tree_sitter_backend: "ast-grep",
+    ast_supported_languages: ["elixir", "python", "rust", "go", "javascript", "typescript"],
+    ast_max_file_size_bytes: 1_000_000,
+    ast_parallel_workers: 8,
+    # ── Tree-sitter grammars (installed via npm) ─────────
+    tree_sitter_grammars: %{
+      elixir: "tree-sitter-elixir",
+      python: "tree-sitter-python",
+      rust: "tree-sitter-rust",
+      go: "tree-sitter-go",
+      javascript: "tree-sitter-javascript",
+      typescript: "tree-sitter-typescript"
+    }
   }
 
   def get(key, default \\ nil) do
