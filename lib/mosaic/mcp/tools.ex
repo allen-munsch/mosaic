@@ -406,6 +406,215 @@ defmodule Mosaic.MCP.Tools do
     end
   end
 
+  # ── Agent Fabric: Sandbox Run ────────────────────────────────
+
+  def call_tool("fabric_sandbox_run", args) do
+    unless fabric_enabled?() do
+      {:error, fabric_disabled_message()}
+    else
+      cmd = Map.get(args, "cmd")
+
+      if is_nil(cmd) or cmd == [] do
+        {:error, "cmd is required (array of strings)"}
+      else
+        image = Map.get(args, "image") || default_image()
+        agent_id = Map.get(args, "agent_id", "default_agent")
+        timeout = Map.get(args, "timeout") || default_timeout()
+
+        opts = build_sandbox_opts(args)
+
+        case Mosaic.Fabric.Sandbox.run(cmd, opts) do
+          {:ok, result} ->
+            # Automatically record in agent memory fabric
+            sandbox_id = result[:container_id] || "sandbox_#{random_short_id()}"
+            {:ok, exec_id, stub} = Mosaic.Fabric.AgentMemory.record_execution(
+              agent_id, sandbox_id, cmd, result
+            )
+
+            output = """
+            Sandbox execution complete (#{result[:duration_ms]}ms)
+            Exit code: #{result[:exit_code]}
+            Execution ID: #{exec_id}
+            #{stub}
+
+            #{format_exec_output(result)}
+            """
+
+            {:ok, String.trim(output)}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      end
+    end
+  end
+
+  # ── Agent Fabric: Sandbox Session ─────────────────────────────
+
+  def call_tool("fabric_sandbox_session", args) do
+    unless fabric_enabled?() do
+      {:error, fabric_disabled_message()}
+    else
+      action = Map.get(args, "action", "create")
+
+      case action do
+        "create" ->
+          image = Map.get(args, "image") || default_image()
+          agent_id = Map.get(args, "agent_id", "default_agent")
+
+          case Mosaic.Fabric.Sandbox.session_create(image,
+                 env: Map.get(args, "env", %{}),
+                 workdir: Map.get(args, "workdir")) do
+            {:ok, session} ->
+              # Register sandbox in graph
+              Mosaic.Fabric.AgentMemory.ensure_sandbox_node(session.session_id, image)
+
+              {:ok, Jason.encode!(%{
+                action: "created",
+                session_id: session.session_id,
+                image: session.image,
+                agent_id: agent_id,
+                status: session.status,
+                usage: "Use fabric_sandbox_session with action='exec' and session_id='#{session.session_id}' to run commands"
+              }, pretty: true)}
+
+            {:error, reason} ->
+              {:error, reason}
+          end
+
+        "exec" ->
+          session_id = Map.get(args, "session_id")
+          cmd = Map.get(args, "cmd")
+          agent_id = Map.get(args, "agent_id", "default_agent")
+
+          cond do
+            is_nil(session_id) -> {:error, "session_id is required for exec action"}
+            is_nil(cmd) or cmd == [] -> {:error, "cmd is required for exec action"}
+            true ->
+              case Mosaic.Fabric.Sandbox.session_exec(session_id, cmd,
+                     env: Map.get(args, "env", %{}),
+                     workdir: Map.get(args, "workdir"),
+                     timeout: Map.get(args, "timeout")) do
+                {:ok, result} ->
+                  Mosaic.Fabric.AgentMemory.record_execution(
+                    agent_id, session_id, cmd, result
+                  )
+
+                  {:ok, format_exec_output(result)}
+
+                {:error, reason} ->
+                  {:error, reason}
+              end
+          end
+
+        "close" ->
+          session_id = Map.get(args, "session_id")
+          if is_nil(session_id) do
+            {:error, "session_id is required for close action"}
+          else
+            Mosaic.Fabric.Sandbox.session_close(session_id)
+            {:ok, "Session #{session_id} closed"}
+          end
+
+        _ ->
+          {:error, "Unknown action: #{action}. Use: create, exec, or close"}
+      end
+    end
+  end
+
+  # ── Agent Fabric: Observe ─────────────────────────────────────
+
+  def call_tool("fabric_agent_observe", args) do
+    agent_id = Map.get(args, "agent_id")
+    include_memories = Map.get(args, "include_memories", true)
+    include_executions = Map.get(args, "include_executions", true)
+    include_graph = Map.get(args, "include_graph", true)
+    memory_limit = Map.get(args, "memory_limit", 10)
+
+    # Build the observation report
+    observation = %{}
+
+    # Agent graph context
+    observation =
+      if include_graph do
+        {:ok, node_counts} = Mosaic.Graph.Traversal.node_counts()
+        {:ok, edge_counts} = Mosaic.Graph.Traversal.edge_counts()
+        {:ok, god_nodes} = Mosaic.Graph.Traversal.god_nodes(10)
+
+        Map.merge(observation, %{
+          graph_topology: %{
+            total_nodes: Enum.map(node_counts, fn [_, c] -> c end) |> Enum.sum(),
+            total_edges: Enum.map(edge_counts, fn [_, c] -> c end) |> Enum.sum(),
+            node_types: Enum.map(node_counts, fn [t, c] -> %{type: t, count: c} end),
+            edge_types: Enum.map(edge_counts, fn [t, c] -> %{type: t, count: c} end),
+            god_nodes: Enum.take(god_nodes, 5) |> Enum.map(&Map.take(&1, [:name, :type, :degree]))
+          }
+        })
+      else
+        observation
+      end
+
+    # Agent-specific data
+    observation =
+      if agent_id do
+        {:ok, context, _handle} = Mosaic.Fabric.AgentMemory.context(agent_id, depth: 2, limit: memory_limit)
+
+        agent_obs = %{
+          agent_id: agent_id,
+          centrality: context.centrality
+        }
+
+        agent_obs =
+          if include_memories do
+            {:ok, neighborhood} = Mosaic.Graph.Traversal.neighborhood(agent_id, 2)
+            memories = neighborhood
+              |> Enum.filter(&(Map.get(&1, :type) in ["memory", "execution", "result"]))
+              |> Enum.take(memory_limit)
+            Map.put(agent_obs, :recent_memories, memories)
+          else
+            agent_obs
+          end
+
+        agent_obs =
+          if include_executions do
+            {:ok, neighborhood} = Mosaic.Graph.Traversal.neighborhood(agent_id, 2)
+            executions = neighborhood
+              |> Enum.filter(&(Map.get(&1, :type) == "execution"))
+              |> Enum.take(memory_limit)
+            Map.put(agent_obs, :recent_executions, executions)
+          else
+            agent_obs
+          end
+
+        Map.put(observation, :agent, agent_obs)
+      else
+        # List all agents in the graph
+        {:ok, node_counts} = Mosaic.Graph.Traversal.node_counts()
+        agent_count = Enum.find_value(node_counts, fn [type, count] -> type == "agent" && count end) || 0
+
+        Map.put(observation, :fabric_summary, %{
+          agent_count: agent_count,
+          tip: "Use agent_id parameter to observe a specific agent"
+        })
+      end
+
+    # Sandbox availability
+    if fabric_enabled?() do
+      case Mosaic.Fabric.Sandbox.pool_stats() do
+        {:ok, stats} ->
+          observation = Map.put(observation, :sandbox_pool, stats)
+        _ ->
+          observation = Map.put(observation, :sandbox_pool, "unavailable")
+      end
+    else
+      observation = Map.put(observation, :sandbox_pool, "fabric not configured")
+    end
+
+    {:ok, Jason.encode!(observation, pretty: true)}
+  end
+
+  # ── Catch-all ─────────────────────────────────────────────────
+
   def call_tool(name, _args) do
     Logger.warning("Unknown MCP tool: #{name}")
     {:error, "Unknown tool: #{name}"}
@@ -460,5 +669,67 @@ defmodule Mosaic.MCP.Tools do
     name
     |> String.slice(0, 30)
     |> String.replace(~r/[^a-zA-Z0-9]/, "_")
+  end
+
+  # ── Fabric Helpers ────────────────────────────────────────────
+
+  defp fabric_enabled? do
+    Mosaic.Config.get(:fabric_enabled, false)
+  end
+
+  defp fabric_disabled_message do
+    "Agent Fabric is not enabled. Set config :mosaic, :fabric_enabled to true and configure :fabric_sandbox_url to point to a Zypi instance."
+  end
+
+  defp default_image do
+    Mosaic.Config.get(:fabric_default_image, "ubuntu:24.04")
+  end
+
+  defp default_timeout do
+    Mosaic.Config.get(:fabric_default_timeout, 30)
+  end
+
+  defp build_sandbox_opts(args) do
+    []
+    |> maybe_put(:image, Map.get(args, "image"))
+    |> maybe_put(:env, Map.get(args, "env", %{}))
+    |> maybe_put(:workdir, Map.get(args, "workdir"))
+    |> maybe_put(:timeout, Map.get(args, "timeout"))
+    |> maybe_put(:memory_mb, Map.get(args, "memory_mb"))
+    |> maybe_put(:vcpus, Map.get(args, "vcpus"))
+    |> maybe_put(:files, Map.get(args, "files", %{}))
+  end
+
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, val), do: Keyword.put(opts, key, val)
+
+  defp format_exec_output(result) do
+    exit_code = result[:exit_code] || result["exit_code"]
+    stdout = result[:stdout] || result["stdout"] || ""
+    stderr = result[:stderr] || result["stderr"] || ""
+    duration = result[:duration_ms] || result["duration_ms"] || 0
+
+    lines = [
+      "Exit code: #{exit_code}",
+      "Duration: #{duration}ms"
+    ]
+
+    lines = if byte_size(stdout) > 0 do
+      lines ++ ["", "--- stdout ---", stdout]
+    else
+      lines
+    end
+
+    lines = if byte_size(stderr) > 0 do
+      lines ++ ["", "--- stderr ---", stderr]
+    else
+      lines
+    end
+
+    Enum.join(lines, "\n")
+  end
+
+  defp random_short_id do
+    :crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower)
   end
 end
