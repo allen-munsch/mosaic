@@ -1,6 +1,7 @@
 #!/usr/bin/env elixir
 # ── Semantic Search Demo ────────────────────────────────────────
 Application.ensure_all_started(:mosaic)
+Mosaic.ShardAutoDiscover.discover()
 
 alias Mosaic.Vector.CascadedSearch
 

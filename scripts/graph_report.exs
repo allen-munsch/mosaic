@@ -1,6 +1,7 @@
 #!/usr/bin/env elixir
 # ── Graph Analysis Report ──────────────────────────────────────
 Application.ensure_all_started(:mosaic)
+Mosaic.ShardAutoDiscover.discover()
 
 IO.puts("MosaicDB Graph Analysis Report")
 IO.puts("==============================")
