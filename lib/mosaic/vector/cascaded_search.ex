@@ -155,6 +155,9 @@ defmodule Mosaic.Vector.CascadedSearch do
     all_params = [embedding_json, embedding_json, 1.0 - min_sim] ++ params ++ [limit]
 
     case Mosaic.FederatedQuery.execute(sql, all_params) do
+      rows when is_list(rows) ->
+        rows_to_results(rows)
+
       {:ok, rows} ->
         rows_to_results(rows)
 
@@ -192,6 +195,7 @@ defmodule Mosaic.Vector.CascadedSearch do
     all_params = [embedding_json] ++ node_ids ++ filter_params ++ [embedding_json, 1.0 - min_sim, limit]
 
     case Mosaic.FederatedQuery.execute(sql, all_params) do
+      rows when is_list(rows) -> rows_to_results(rows)
       {:ok, rows} -> rows_to_results(rows)
       {:error, _} -> []
     end

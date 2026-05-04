@@ -47,8 +47,8 @@ defmodule Mix.Tasks.Mosaic.Mcp do
     Application.put_env(:mosaic, :mcp_enabled, true)
     Application.put_env(:mosaic, :mcp_transport, "stdio")
 
-    # Redirect all Logger output to stderr (stdout is for JSON-RPC only)
-    Logger.configure_backend(:console, device: :stderr)
+    # MCP requires stdout for JSON-RPC only; Logger output is acceptable
+    # as stderr, which is the default.
 
     # Suppress inspect noise from startup
     Application.put_env(:mosaic, :startup_quiet, true)

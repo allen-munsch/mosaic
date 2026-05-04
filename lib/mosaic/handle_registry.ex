@@ -119,7 +119,12 @@ defmodule Mosaic.HandleRegistry do
   def delete(handle_name) do
     with {:ok, conn} <- get_connection() do
       Mosaic.DB.execute(conn, "DELETE FROM handles WHERE handle_name = ?", [handle_name])
-      Mosaic.DB.execute(conn, "DELETE FROM handles_fts WHERE handle_name = ?", [handle_name])
+      # handles_fts may not exist; ignore errors
+      try do
+        Mosaic.DB.execute(conn, "DELETE FROM handles_fts WHERE handle_name = ?", [handle_name])
+      rescue
+        _ -> :ok
+      end
       release_connection(conn)
       :ok
     end
@@ -211,7 +216,35 @@ defmodule Mosaic.HandleRegistry do
   defp get_connection do
     # Use the routing DB (always available, same life as the app)
     routing_db = Mosaic.Config.get(:routing_db_path)
+    ensure_handles_table(routing_db)
     Mosaic.ConnectionPool.checkout(routing_db)
+  end
+
+  defp ensure_handles_table(routing_db) do
+    # Lazy-init: create handles table in routing DB if missing
+    unless File.exists?(routing_db) do
+      File.mkdir_p!(Path.dirname(routing_db))
+    end
+
+    case Mosaic.ConnectionPool.checkout(routing_db) do
+      {:ok, conn} ->
+        Mosaic.DB.execute(conn, """
+          CREATE TABLE IF NOT EXISTS handles (
+            handle_name TEXT PRIMARY KEY,
+            result_type TEXT NOT NULL DEFAULT 'array',
+            item_count INTEGER DEFAULT 0,
+            preview TEXT,
+            full_data BLOB,
+            created_at TEXT DEFAULT (datetime('now')),
+            ttl_seconds INTEGER DEFAULT 3600
+          )
+        """)
+
+        Mosaic.DB.execute(conn, "CREATE INDEX IF NOT EXISTS idx_handles_created ON handles(created_at)")
+        Mosaic.ConnectionPool.checkin(routing_db, conn)
+        :ok
+      _ -> :ok
+    end
   end
 
   defp release_connection(conn) do

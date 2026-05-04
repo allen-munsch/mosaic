@@ -184,6 +184,70 @@ defmodule Mosaic.API do
     json_ok(conn, metrics)
   end
 
+  # MCP HTTP Transport — JSON-RPC 2.0 over HTTP
+  # Supports both standard JSON response and SSE streaming (Accept: text/event-stream)
+
+  post "/mcp" do
+    # Use body_params (already parsed by Plug.Parsers) or raw body
+    request = case conn.body_params do
+      %{"method" => _} = rpc -> rpc
+      _ ->
+        case Jason.decode(read_raw_body(conn)) do
+          {:ok, rpc} -> rpc
+          _ -> nil
+        end
+    end
+
+    if is_nil(request) do
+      conn |> json_error(400, "Invalid JSON-RPC request")
+    else
+      wants_sse = String.contains?(
+        get_req_header(conn, "accept") |> Enum.join(","),
+        "text/event-stream"
+      )
+
+      result = Mosaic.MCP.Protocol.process_request(
+        Jason.encode!(request),
+        Mosaic.MCP.Protocol.new(Mosaic.MCP.Tools)
+      )
+
+      case result do
+        {:ok, nil, _state} ->
+          conn |> json_ok(202, %{})
+
+        {:ok, response_json, _state} ->
+          if wants_sse do
+            send_sse(conn, response_json)
+          else
+            # The response_json is already a JSON-RPC response — return directly
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(200, response_json)
+          end
+
+        {:error, error_json, _state} ->
+          conn
+          |> put_resp_content_type("application/json")
+          |> send_resp(400, error_json)
+      end
+    end
+  end
+
+  defp read_raw_body(conn) do
+    {:ok, body, _conn} = Plug.Conn.read_body(conn)
+    body
+  end
+
+  get "/mcp" do
+    json_ok(conn, %{
+      protocol: "mcp",
+      version: "2024-11-05",
+      transports: ["stdio", "http"],
+      endpoint: "/mcp",
+      server: %{name: "mosaic-mcp", version: "0.2.0"}
+    })
+  end
+
   match _ do
     send_resp(conn, 404, "Not Found")
   end
@@ -242,5 +306,24 @@ defmodule Mosaic.API do
       end_offset: ref.end_offset,
       parent_context: ref.parent_context
     }
+  end
+
+  # MCP SSE streaming helper
+  defp send_sse(conn, response_json) do
+    response = Jason.decode!(response_json)
+    id = Map.get(response, "id")
+
+    sse_body =
+      if id do
+        "id: #{id}\ndata: #{response_json}\n\n"
+      else
+        "data: #{response_json}\n\n"
+      end
+
+    conn
+    |> put_resp_header("cache-control", "no-cache")
+    |> put_resp_header("connection", "keep-alive")
+    |> put_resp_content_type("text/event-stream")
+    |> send_resp(200, sse_body)
   end
 end

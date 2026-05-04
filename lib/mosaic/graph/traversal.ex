@@ -45,7 +45,6 @@ defmodule Mosaic.Graph.Traversal do
       FROM caller_chain c
       JOIN edges e ON e.target_id = c.node_id AND e.type = 'calls'
       WHERE c.depth < ?
-        AND e.source_id NOT IN (SELECT node_id FROM caller_chain)
     )
     SELECT c.depth, n.id, n.name, n.type, n.file_path, n.start_line, n.end_line,
            n.properties, c.path
@@ -88,7 +87,6 @@ defmodule Mosaic.Graph.Traversal do
       FROM callee_chain c
       JOIN edges e ON e.source_id = c.node_id AND e.type = 'calls'
       WHERE c.depth < ?
-        AND e.target_id NOT IN (SELECT node_id FROM callee_chain)
     )
     SELECT c.depth, n.id, n.name, n.type, n.file_path, n.start_line, n.end_line,
            n.properties, c.path
@@ -130,7 +128,6 @@ defmodule Mosaic.Graph.Traversal do
       FROM ancestor_chain ac
       JOIN edges e ON e.source_id = ac.node_id AND e.type = 'extends'
       WHERE ac.depth < #{@max_depth}
-        AND e.target_id NOT IN (SELECT node_id FROM ancestor_chain)
     )
     SELECT ac.depth, n.id, n.name, n.type, n.file_path, n.properties, ac.path
     FROM ancestor_chain ac
@@ -154,7 +151,6 @@ defmodule Mosaic.Graph.Traversal do
       FROM descendant_chain dc
       JOIN edges e ON e.target_id = dc.node_id AND e.type = 'extends'
       WHERE dc.depth < #{@max_depth}
-        AND e.source_id NOT IN (SELECT node_id FROM descendant_chain)
     )
     SELECT dc.depth, n.id, n.name, n.type, n.file_path, n.properties, dc.path
     FROM descendant_chain dc
@@ -320,7 +316,6 @@ defmodule Mosaic.Graph.Traversal do
       FROM dep_chain dc
       JOIN edges e ON e.target_id = dc.node_id
       WHERE dc.depth < ?
-        AND e.source_id NOT IN (SELECT node_id FROM dep_chain)
     )
     SELECT dc.depth, n.id, n.name, n.type, n.file_path
     FROM dep_chain dc
@@ -361,11 +356,21 @@ defmodule Mosaic.Graph.Traversal do
   end
 
   defp exec(sql, params) do
-    # Use FederatedQuery for cross-shard, fall back to single-shard for routing DB
-    Mosaic.FederatedQuery.execute(sql, params)
-  rescue
-    _ ->
-      # Fallback: try routing DB directly (for handles/management queries)
+    # Query only shards that have nodes/edges tables.
+    # Skip the routing DB and other non-graph shards.
+    shards = Mosaic.ShardRouter.list_all_shards()
+    |> Enum.filter(fn s ->
+      case Mosaic.ConnectionPool.checkout(s.path) do
+        {:ok, conn} ->
+          result = Mosaic.DB.query_one(conn, "SELECT COUNT(*) FROM nodes")
+          Mosaic.ConnectionPool.checkin(s.path, conn)
+          match?({:ok, _}, result)
+        _ -> false
+      end
+    end)
+
+    if shards == [] do
+      # Fallback: query routing DB
       with {:ok, conn} <- Mosaic.ConnectionPool.checkout(Mosaic.Config.get(:routing_db_path)) do
         result = Mosaic.DB.query(conn, sql, params)
         Mosaic.ConnectionPool.checkin(Mosaic.Config.get(:routing_db_path), conn)
@@ -373,5 +378,19 @@ defmodule Mosaic.Graph.Traversal do
       else
         error -> error
       end
+    else
+      # Execute on each graph shard and merge
+      results = Enum.flat_map(shards, fn shard ->
+        case Mosaic.ConnectionPool.checkout(shard.path) do
+          {:ok, conn} ->
+            case Mosaic.DB.query(conn, sql, params) do
+              {:ok, rows} -> rows
+              _ -> []
+            end
+          _ -> []
+        end
+      end)
+      {:ok, results}
+    end
   end
 end

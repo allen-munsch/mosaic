@@ -98,7 +98,12 @@ defmodule Mosaic.Graph.Communities do
   end
 
   defp exec(sql, params) do
-    Mosaic.FederatedQuery.execute(sql, params)
+    result = Mosaic.FederatedQuery.execute(sql, params)
+    case result do
+      rows when is_list(rows) -> {:ok, rows}
+      {:ok, _} = ok -> ok
+      {:error, _} = err -> err
+    end
   rescue
     _ ->
       with {:ok, conn} <- Mosaic.ConnectionPool.checkout(Mosaic.Config.get(:routing_db_path)) do
