@@ -54,8 +54,7 @@ defmodule Mosaic.Vector.CascadedSearchTest do
   end
 
   test "search returns empty for unknown query terms" do
-    # With no shards registered, search returns empty list
-    zero = List.duplicate(0.0, 8)
+    zero = List.duplicate(0.0, 384)
     results = CascadedSearch.search(zero, limit: 10, skip_levels: true)
     assert is_list(results)
   end
@@ -73,7 +72,7 @@ defmodule Mosaic.Vector.CascadedSearchTest do
   end
 
   test "search respects skip_levels option" do
-    zero = List.duplicate(0.0, 8)
+    zero = List.duplicate(0.0, 384)
     results = CascadedSearch.search(zero, limit: 3, skip_levels: true)
     assert is_list(results)
   end

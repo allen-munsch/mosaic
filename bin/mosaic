@@ -1,188 +1,95 @@
 #!/usr/bin/env bash
-# ── MosaicDB CLI ─────────────────────────────────────────────────
-# Generic code repo ingestor with graph traversal and semantic search.
-#
-# Usage:
-#   mosaic ingest <path>      Index a file, directory, or git repo
-#   mosaic search <query>     Search indexed code
-#   mosaic traverse <node> <relation>  Navigate the code graph
-#   mosaic report             Show graph analysis report
-#   mosaic status             Show indexing statistics
-#   mosaic mcp                Start MCP server (stdio)
-#   mosaic server             Start HTTP API + MCP server
-#   mosaic demo               Run interactive demo
-
+# ── MosaicDB CLI — Universal Code & Document Ingestor ────────────
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-RELEASE="$SCRIPT_DIR/../_build/dev/rel/mosaic/bin/mosaic"
+[ -z "${MOSAIC_DEBUG:-}" ] && export MOSAIC_QUIET=1
 
-# Quiet mode for cleaner output
-if [ -z "${MOSAIC_DEBUG:-}" ]; then
-  export MOSAIC_QUIET=1
-fi
-
-# If release not built, use mix directly
-if [ -f "$RELEASE" ]; then
-  RUNNER="$RELEASE"
-  EVAL_CMD="eval"
-else
-  RUNNER="mix"
-  EVAL_CMD="run -e"
-fi
+RUNNER="mix"
+EVAL_CMD="run -e"
 
 cmd="${1:-help}"
 shift 2>/dev/null || true
 
+quiet_filter() { grep -v "warning:\|info]\|debug]\|Compil\|All config\|index_strategy\|QueryEngine\|Discover" 2>/dev/null || true; }
+
 case "$cmd" in
+  # ── Code Ingestion ──────────────────────────────────────────
   ingest)
-    path="${1:-.}"
-    echo "Indexing $path into MosaicDB graph..."
-    $RUNNER $EVAL_CMD '
-      Application.ensure_all_started(:mosaic)
-      Mosaic.ShardAutoDiscover.discover()
-      path = System.argv() |> hd()
-      IO.puts("Parsing #{path}...")
-
-      alias Mosaic.AST.BuiltinParser
-      alias Mosaic.Graph.Writer
-
-      shard = Path.join(Mosaic.Config.get(:storage_path), "ingest_#{System.os_time(:millisecond)}.db")
-      Mosaic.StorageManager.create_shard(shard)
-
-      files = if File.dir?(path), do: Path.wildcard(path <> "/**/*.{ex,exs}"), else: [path]
-      IO.puts("Found #{length(files)} files")
-
-      {nodes, edges} = Enum.reduce(files, {0,0}, fn f, {tn,te} ->
-        case File.read(f) do
-          {:ok, src} ->
-            {ns, es} = BuiltinParser.extract_elixir(src, f)
-            unless Enum.empty?(ns) do
-              {:ok, s} = Writer.write_subgraph(shard, ns, es)
-              {tn + s.nodes_written, te + s.edges_written}
-            else
-              {tn, te}
-            end
-          _ -> {tn, te}
-        end
-      end)
-
-      Mosaic.ShardRouter.register_shard(%{id: "ingest", path: shard,
-        centroids: %{document: List.duplicate(0.0, 384)}, doc_count: nodes, bloom_filter: nil})
-      Mosaic.ShardAutoDiscover.discover()
-
-      IO.puts("Done. #{nodes} nodes, #{edges} edges → #{shard}")
-    ' "$(realpath "$path")" 2>&1 | grep -v "warning:\|info]\|debug]\|Compil\|All config\|index_strategy\|QueryEngine"
+    path="${1:-.}"; echo "Indexing $path..."
+    $RUNNER $EVAL_CMD 'Application.ensure_all_started(:mosaic); Mosaic.ShardAutoDiscover.discover(); path=System.argv()|>hd(); alias=Mosaic.AST.BuiltinParser; alias2=Mosaic.Graph.Writer; shard=Path.join(Mosaic.Config.get(:storage_path),"ingest_#{System.os_time(:millisecond)}.db"); Mosaic.StorageManager.create_shard(shard); files=if File.dir?(path),do: Path.wildcard(path<>"/**/*.{ex,exs}"),else: [path]; {n,e}=Enum.reduce(files,{0,0},fn f,{tn,te}->case File.read(f)do {:ok,src}->{ns,es}=alias.extract_elixir(src,f); unless Enum.empty?(ns)do {:ok,s}=alias2.write_subgraph(shard,ns,es); {tn+s.nodes_written,te+s.edges_written} else {tn,te} end; _->{tn,te} end end); Mosaic.ShardRouter.register_shard(%{id:"ingest",path: shard,centroids: %{document: List.duplicate(0.0,384)},doc_count: n,bloom_filter: nil}); IO.puts("Done. #{n} nodes, #{e} edges")' "$(realpath "$path")" 2>&1 | quiet_filter
     ;;
 
+  # ── Document Ingestion (PDF, DOCX, MD, TXT, HTML) ───────────
+  docs)
+    path="${1:-.}"; echo "Ingesting documents from $path..."
+    $RUNNER $EVAL_CMD 'Application.ensure_all_started(:mosaic); Mosaic.ShardAutoDiscover.discover(); path=System.argv()|>hd(); case Mosaic.Document.Ingestor.ingest_directory(path,embed: false)do {:ok,s}->IO.puts("Files: #{s.files} Chunks: #{s.chunks} Errors: #{s.errors}"); {:error,r}->IO.puts("Error: #{inspect(r)}") end' "$(realpath "$path")" 2>&1 | quiet_filter
+    ;;
+
+  # ── RAG Retrieval ───────────────────────────────────────────
+  rag)
+    query="${1:-}"; [ -z "$query" ] && { echo "Usage: mosaic rag <query>"; exit 1; }
+    $RUNNER $EVAL_CMD 'Application.ensure_all_started(:mosaic); Mosaic.ShardAutoDiscover.discover(); q=System.argv()|>hd(); case Mosaic.RAG.Pipeline.retrieve(q,top_k: 5)do {:ok,r}->if r.chunks==[]do IO.puts("No matching chunks. Ingest docs first: mosaic docs <path>") else IO.puts("Found #{length(r.chunks)} chunks (~#{r.token_count} tokens):"); Enum.each(r.chunks,fn c->IO.puts("  [#{c.similarity}] #{String.slice(c.name||"",0,100)}"); IO.puts("  Source: #{c.file_path}"); IO.puts("") end) end; {:error,r}->IO.puts("Error: #{inspect(r)}") end' "$query" 2>&1 | quiet_filter
+    ;;
+
+  # ── Search ──────────────────────────────────────────────────
   search)
-    query="${1:-}"
-    [ -z "$query" ] && { echo "Usage: mosaic search <query>"; exit 1; }
-    $RUNNER $EVAL_CMD '
-      Application.ensure_all_started(:mosaic)
-      Mosaic.ShardAutoDiscover.discover()
-      q = System.argv() |> hd()
-      words = String.split(q, " ")
-      clauses = Enum.map_join(words, " OR ", fn _ -> "name LIKE ?" end)
-      params = Enum.map(words, &"%#{&1}%")
-      results = Mosaic.FederatedQuery.execute(
-        "SELECT name, type, file_path, start_line FROM nodes WHERE #{clauses} LIMIT 10", params)
-      Enum.each(results, fn [name, type, file, line] ->
-        IO.puts("  [#{type}] #{name} — #{file}:#{line}")
-      end)
-    ' "$query" 2>&1 | grep -v "warning:\|info]\|debug:\|Compil\|All config\|index_strategy\|QueryEngine"
+    query="${1:-}"; [ -z "$query" ] && { echo "Usage: mosaic search <query>"; exit 1; }
+    $RUNNER $EVAL_CMD 'Application.ensure_all_started(:mosaic); Mosaic.ShardAutoDiscover.discover(); q=System.argv()|>hd(); words=String.split(q," "); clauses=Enum.map_join(words," OR ",fn _->"name LIKE ?"end); params=Enum.map(words,&"%#{&1}%"); r=Mosaic.FederatedQuery.execute("SELECT name,type,file_path,start_line FROM nodes WHERE #{clauses} LIMIT 10",params); Enum.each(r,fn [name,type,file,line]->IO.puts("  [#{type}] #{name} — #{file}:#{line}")end)' "$query" 2>&1 | quiet_filter
     ;;
 
+  # ── Traverse ────────────────────────────────────────────────
   traverse)
-    node="${1:-}"
-    rel="${2:-callers}"
-    [ -z "$node" ] && { echo "Usage: mosaic traverse <node> [callers|callees|neighborhood]"; exit 1; }
-    $RUNNER $EVAL_CMD '
-      Application.ensure_all_started(:mosaic)
-      Mosaic.ShardAutoDiscover.discover()
-      [n, r] = System.argv()
-      IO.puts("Traversing #{r} of #{n}...")
-      results = case r do
-        "callers" -> Mosaic.Graph.Traversal.callers(n, depth: 2)
-        "callees" -> Mosaic.Graph.Traversal.callees(n, depth: 2)
-        "neighborhood" -> Mosaic.Graph.Traversal.neighborhood(n, 1)
-        _ -> Mosaic.Graph.Traversal.callers(n, depth: 1)
-      end
-      case results do
-        {:ok, rows} when is_list(rows) ->
-          Enum.each(rows, fn [d, _, name, type, file, line | _] ->
-            IO.puts("  [#{d}] #{name} (#{type}) — #{file}:#{line}")
-          end)
-        {:ok, %{nodes: ns, edges: es}} ->
-          IO.puts("  #{length(ns)} nodes, #{length(es)} edges")
-          Enum.each(Enum.take(ns, 10), fn n -> IO.puts("    #{n.name}") end)
-        _ -> IO.puts("  no results")
-      end
-    ' "$node" "$rel" 2>&1 | grep -v "warning:\|info]\|debug:\|Compil\|All config\|index_strategy\|QueryEngine"
+    node="${1:-}"; rel="${2:-callers}"; [ -z "$node" ] && { echo "Usage: mosaic traverse <node> [callers|callees|neighborhood]"; exit 1; }
+    $RUNNER $EVAL_CMD 'Application.ensure_all_started(:mosaic); Mosaic.ShardAutoDiscover.discover(); [n,r]=System.argv(); r2=case r do"callers"->Mosaic.Graph.Traversal.callers(n,depth: 2); "callees"->Mosaic.Graph.Traversal.callees(n,depth: 2); "neighborhood"->Mosaic.Graph.Traversal.neighborhood(n,1); _->Mosaic.Graph.Traversal.callers(n,depth: 1)end; case r2 do{:ok,rows}when is_list(rows)->Enum.each(rows,fn [d,_,name,type,file,line|_]->IO.puts("  [#{d}] #{name} (#{type}) — #{file}:#{line}")end); {:ok,%{nodes: ns}}->IO.puts("  #{length(ns)} nodes"); Enum.each(Enum.take(ns,10),fn n->IO.puts("    #{n.name}")end); _->IO.puts("  no results")end' "$node" "$rel" 2>&1 | quiet_filter
     ;;
 
+  # ── Report ──────────────────────────────────────────────────
   report)
-    $RUNNER $EVAL_CMD '
-      Application.ensure_all_started(:mosaic)
-      Mosaic.ShardAutoDiscover.discover()
-      {:ok, nc} = Mosaic.Graph.Traversal.node_counts()
-      {:ok, ec} = Mosaic.Graph.Traversal.edge_counts()
-      tn = nc |> Enum.map(fn [_,c] -> c end) |> Enum.sum()
-      te = ec |> Enum.map(fn [_,c] -> c end) |> Enum.sum()
-      IO.puts("Nodes: #{tn}  Edges: #{te}")
-      Enum.each(nc, fn [t,c] -> IO.puts("  #{t}: #{c}") end)
-      IO.puts("")
-      {:ok, gods} = Mosaic.Graph.Traversal.god_nodes(5)
-      IO.puts("God nodes:")
-      Enum.each(gods, fn n -> IO.puts("  #{n.name} (#{n.type}) — degree #{n.degree}") end)
-    ' 2>&1 | grep -v "warning:\|info]\|debug:\|Compil\|All config\|index_strategy\|QueryEngine"
+    $RUNNER $EVAL_CMD 'Application.ensure_all_started(:mosaic); Mosaic.ShardAutoDiscover.discover(); {:ok,nc}=Mosaic.Graph.Traversal.node_counts(); {:ok,ec}=Mosaic.Graph.Traversal.edge_counts(); tn=nc|>Enum.map(fn [_,c]->c end)|>Enum.sum(); te=ec|>Enum.map(fn [_,c]->c end)|>Enum.sum(); IO.puts("Nodes: #{tn} Edges: #{te}"); Enum.each(nc,fn [t,c]->IO.puts("  #{t}: #{c}")end); IO.puts(""); {:ok,g}=Mosaic.Graph.Traversal.god_nodes(5); IO.puts("God nodes:"); Enum.each(g,fn n->IO.puts("  #{n.name} (#{n.type}) — degree #{n.degree}")end)' 2>&1 | quiet_filter
     ;;
 
+  # ── Status ──────────────────────────────────────────────────
   status)
-    find /tmp/mosaic/shards -name "*.db" 2>/dev/null | while read f; do
-      echo "  $(basename $f) — $(du -h "$f" | cut -f1)"
-    done
+    find /tmp/mosaic/shards -name "*.db" 2>/dev/null | while read f; do echo "  $(basename $f) — $(du -h "$f" | cut -f1)"; done
     ;;
 
-  mcp)
-    echo "Starting MosaicDB MCP server on stdio..."
-    $RUNNER eval 'Mix.Tasks.Mosaic.Mcp.run([])' 2>/dev/null
-    ;;
+  # ── Servers ─────────────────────────────────────────────────
+  mcp) echo "Starting MCP server..."; $RUNNER eval 'Mix.Tasks.Mosaic.Mcp.run([])' 2>/dev/null ;;
+  server) echo "Starting HTTP server on :4040..."; $RUNNER run --no-halt 2>/dev/null ;;
+  demo) $RUNNER run scripts/demo.exs 2>&1 | quiet_filter ;;
 
-  server)
-    echo "Starting MosaicDB HTTP server on :4040..."
-    $RUNNER run --no-halt 2>/dev/null
-    ;;
-
-  demo)
-    $RUNNER run scripts/demo.exs 2>&1 | grep -v "warning:\|info]\|debug:\|Compil\|All config\|index_strategy\|QueryEngine"
-    ;;
-
+  # ── Help ────────────────────────────────────────────────────
   help|--help|-h)
-    echo "MosaicDB — Federated Semantic Code Graph Ingestor"
+    echo "MosaicDB — Federated Semantic Code & Document Ingestor"
     echo ""
-    echo "Usage: mosaic <command> [args]"
+    echo "Code Ingestion:"
+    echo "  mosaic ingest <path>      Parse & index a codebase"
     echo ""
-    echo "Commands:"
-    echo "  ingest <path>      Index a file, directory, or git repo"
-    echo "  search <query>     Search indexed code"
-    echo "  traverse <node> <relation>  Navigate code graph"
-    echo "  report             Graph analysis report"
-    echo "  status             Show shard storage info"
-    echo "  mcp                Start MCP stdio server"
-    echo "  server             Start HTTP API server"
-    echo "  demo               Run interactive demo"
+    echo "Document Ingestion (RAG):"
+    echo "  mosaic docs <path>        Chunk & index PDFs, DOCX, MD, TXT, HTML"
+    echo "  mosaic rag <query>        RAG retrieval across indexed docs"
+    echo "  mosaic rag-hybrid <query> Hybrid vector + keyword retrieval"
+    echo ""
+    echo "Query & Analysis:"
+    echo "  mosaic search <query>     Search indexed code/docs"
+    echo "  mosaic traverse <node> <r> Navigate code graph"
+    echo "  mosaic report             Graph analysis report"
+    echo ""
+    echo "Servers:"
+    echo "  mosaic server             HTTP API on :4040 + MCP on /mcp"
+    echo "  mosaic mcp                MCP stdio (for Matryoshka/agents)"
+    echo ""
+    echo "Other:"
+    echo "  mosaic status             Show shard storage"
+    echo "  mosaic demo               Run interactive demo"
     echo ""
     echo "Examples:"
     echo "  mosaic ingest ~/projects/myapp"
-    echo "  mosaic search 'error handling'"
+    echo "  mosaic docs ~/kb/articles/"
+    echo "  mosaic rag 'What is the authentication flow?'"
     echo "  mosaic traverse MyModule.my_func callees"
-    echo "  mosaic report"
     ;;
 
-  *)
-    echo "Unknown command: $cmd"
-    echo "Run 'mosaic help' for usage."
-    exit 1
-    ;;
+  *) echo "Unknown: $cmd. Try: mosaic help"; exit 1 ;;
 esac
