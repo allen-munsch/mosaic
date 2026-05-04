@@ -1,247 +1,171 @@
-.PHONY: help build up down restart logs status clean backup restore test scale health
+.PHONY: help test test-watch test-new test-isolated compile format clean
 
-# Default target
+# ── Default ──────────────────────────────────────────────────────
 help:
-	@echo "Semantic Fabric - Available Commands"
-	@echo "===================================="
+	@echo "MosaicDB — Federated Semantic Code Graph"
+	@echo "========================================"
 	@echo ""
-	@echo "Setup & Deployment:"
-	@echo "  make deploy       - Initial deployment (build + up + health check)"
-	@echo "  make build        - Build Docker images"
-	@echo "  make up           - Start all services"
-	@echo "  make down         - Stop and remove all services"
-	@echo "  make restart      - Restart all services"
+	@echo "  make test            Run full test suite"
+	@echo "  make test-watch      Run tests on file changes"
+	@echo "  make test-new        Run only new tests (phases 1-6)"
+	@echo "  make test-isolated   Run each test file separately"
+	@echo "  make compile         Compile project"
+	@echo "  make format          Format all code"
+	@echo "  make clean           Remove build artifacts"
 	@echo ""
-	@echo "Monitoring:"
-	@echo "  make logs         - Follow all logs"
-	@echo "  make status       - Show service status"
-	@echo "  make health       - Check cluster health"
-	@echo "  make stats        - Show cluster statistics"
+	@echo "  make demo            Full demo: index code → traverse → search → report"
+	@echo "  make index           Index the MosaicDB codebase into the graph"
+	@echo "  make search          Run semantic search against indexed code"
+	@echo "  make traverse        Run graph traversal demos"
+	@echo "  make graph-report    Show graph analysis (god nodes, communities)"
 	@echo ""
-	@echo "Scaling:"
-	@echo "  make scale N=5    - Scale workers to N instances"
-	@echo "  make add-worker   - Add one worker node"
+	@echo "  make iex             Start IEx with app loaded"
+	@echo "  make server          Start HTTP server (port 4040)"
 	@echo ""
-	@echo "Maintenance:"
-	@echo "  make backup       - Create manual backup"
-	@echo "  make restore      - Restore from latest backup"
-	@echo "  make clean        - Remove all data (WARNING: destructive)"
-	@echo "  make vacuum       - Optimize databases"
+	@echo "  make mcp-server      Start MCP stdio server"
+	@echo "  make mcp-http        Start HTTP server + show curl examples"
+	@echo "  make mcp-test        Smoke-test MCP over stdio"
+	@echo "  make mcp-curl        Show curl commands for MCP HTTP endpoint"
 	@echo ""
-	@echo "Development:"
-	@echo "  make test         - Run test suite"
-	@echo "  make shell        - Open shell in coordinator"
-	@echo "  make iex          - Open IEx console in coordinator"
+	@echo "  make integration     Matryoshka integration demo (concept showcase)"
 	@echo ""
 
-# Deployment commands
-deploy:
-	@chmod +x deploy.sh
-	@./deploy.sh
-
-build:
-	@echo "Building Docker images..."
-	@docker compose build
-
-up:
-	@echo "Starting services..."
-	@docker compose up -d
-	@sleep 5
-	@make health
-
-down:
-	@echo "Stopping services..."
-	@docker compose down
-
-restart:
-	@echo "Restarting services..."
-	@docker compose restart
-	@sleep 5
-	@make health
-
-# Monitoring commands
-logs:
-	@docker compose logs -f
-
-status:
-	@docker compose ps
-
-health:
-	@echo "Checking cluster health..."
-	@curl -s http://localhost/health || echo "API not responding"
-	@echo ""
-	@echo "Service Status:"
-	@docker compose ps --format "table {{.Service}}\t{{.Status}}\t{{.Ports}}"
-
-stats:
-	@echo "Cluster Statistics:"
-	@curl -s http://localhost/api/stats | jq '.' || echo "Stats endpoint not available"
-
-# Scaling commands
-scale:
-ifndef N
-	@echo "Usage: make scale N=<number_of_workers>"
-	@exit 1
-endif
-	@echo "Scaling workers to $(N) instances..."
-	@docker compose up -d --scale worker=$(N)
-
-add-worker:
-	@echo "Adding one worker node..."
-	@CURRENT=$$(docker compose ps worker | grep -c worker); \
-	NEW=$$((CURRENT + 1)); \
-	docker compose up -d --scale worker=$$NEW
-
-# Maintenance commands
-backup:
-	@echo "Creating manual backup..."
-	@docker compose exec backup /backup/backup.sh
-
-restore:
-	@echo "Restoring from latest backup..."
-	@./restore.sh
-
-vacuum:
-	@echo "Optimizing databases..."
-	@docker compose exec coordinator sqlite3 /data/routing/index.db "VACUUM; ANALYZE;"
-	@echo "Database optimization complete"
-
-clean:
-	@echo "WARNING: This will remove all data!"
-	@read -p "Are you sure? (yes/no): " confirm; \
-	if [ "$$confirm" = "yes" ]; then \
-		echo "Stopping services..."; \
-		docker compose down -v; \
-		echo "Removing data directories..."; \
-		rm -rf data/*; \
-		echo "Clean complete"; \
-	else \
-		echo "Aborted"; \
-	fi
-
-# Development commands
+# ── Test ─────────────────────────────────────────────────────────
 test:
-	@echo "Running test suite..."
-	@docker compose exec coordinator mix test
+	@mix test 2>&1 | tail -5
 
-shell:
-	@docker compose exec coordinator /bin/bash
+test-watch:
+	@mix test.watch 2>/dev/null || fswatch lib test | while read f; do mix test; done
 
-iex:
-	@docker compose exec coordinator bin/semantic_fabric remote
+test-new:
+	@mix test test/mosaic/graph/ test/mosaic/handle_registry_test.exs \
+		test/mosaic/mcp/ test/mosaic/ast/ test/mosaic/vector/ 2>&1 | tail -3
 
-# Local Development Commands (using asdf)
-.PHONY: local-deps local-compile local-test local-run local-format local-iex
-local-deps:
-	@echo "Fetching local dependencies..."
-	@mix deps.get
+test-isolated:
+	@for f in test/mosaic/graph/*.exs test/mosaic/mcp/*.exs test/mosaic/ast/*.exs test/mosaic/vector/*.exs test/mosaic/handle_registry_test.exs; do \
+		echo "=== $$f ==="; mix test $$f 2>&1 | tail -1; \
+	done
 
-local-compile:
-	@echo "Compiling local project..."
+compile:
 	@mix compile
 
-local-test:
-	@echo "Running local test suite..."
-	@mix test
-
-local-run:
-	@echo "Running local application..."
-	@mix run --no-halt
-
-local-format:
-	@echo "Formatting local code..."
+format:
 	@mix format
 
-local-iex:
-	@echo "Starting local IEx console..."
+clean:
+	@mix clean
+	@rm -rf _build deps .elixir_ls
+	@echo "Cleaned. Run 'mix deps.get && mix compile' to rebuild."
+
+# ── Full Demo ────────────────────────────────────────────────────
+demo:
+	@echo "============================================"
+	@echo "  MosaicDB — Code Graph Demo"
+	@echo "============================================"
+	@echo ""
+	@mix run scripts/demo.exs
+
+# ── Index + Search + Traverse ────────────────────────────────────
+index:
+	@echo "Indexing MosaicDB codebase into graph..."
+	@mix run scripts/index_codebase.exs
+
+search:
+	@echo "Semantic search demo..."
+	@mix run scripts/search_demo.exs
+
+traverse:
+	@echo "Graph traversal demo..."
+	@mix run scripts/traverse_demo.exs
+
+graph-report:
+	@echo "Graph analysis report..."
+	@mix run scripts/graph_report.exs
+
+# ── IEx + Server ─────────────────────────────────────────────────
+iex:
 	@iex -S mix
 
-# Utility commands
-.PHONY: update-deps
-update-deps:
-	@echo "Updating dependencies..."
-	@docker compose exec coordinator mix deps.update --all
-	@docker compose exec coordinator mix deps.compile
+server:
+	@echo "Starting HTTP server on port 4040..."
+	@mix run --no-halt
 
-.PHONY: format
-format:
-	@echo "Formatting code..."
-	@docker compose exec coordinator mix format
+# ── MCP ───────────────────────────────────────────────────────────
+mcp-server:
+	@echo "Starting MCP stdio server (press Ctrl+D to quit)..."
+	@echo "Paste JSON-RPC requests, e.g.:"
+	@echo '  {"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+	@echo ""
+	@mix mosaic.mcp
 
-.PHONY: lint
-lint:
-	@echo "Running linter..."
-	@docker compose exec coordinator mix credo
+mcp-test:
+	@echo "Smoke-testing MCP over stdio..."
+	@printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{}}}\n{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n{"jsonrpc":"2.0","id":3,"method":"ping","params":{}}\n' | mix mosaic.mcp 2>/dev/null | grep '^{'
 
-.PHONY: dialyzer
-dialyzer:
-	@echo "Running dialyzer..."
-	@docker compose exec coordinator mix dialyzer
+mcp-http:
+	@echo "Starting HTTP server in background..."
+	@mix run --no-halt &
+	@sleep 3
+	@echo ""
+	@echo "=== GET /mcp ==="
+	@curl -s http://localhost:4040/mcp | python3 -m json.tool 2>/dev/null || curl -s http://localhost:4040/mcp
+	@echo ""
+	@echo "=== POST /mcp tools/list ==="
+	@curl -s -X POST http://localhost:4040/mcp -H 'Content-Type: application/json' \
+		-d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | python3 -m json.tool 2>/dev/null
+	@echo ""
+	@echo "=== POST /mcp ping (SSE) ==="
+	@curl -s -X POST http://localhost:4040/mcp -H 'Content-Type: application/json' \
+		-H 'Accept: text/event-stream' \
+		-d '{"jsonrpc":"2.0","id":2,"method":"ping","params":{}}'
+	@echo ""
+	@kill %1 2>/dev/null; true
 
-# Advanced operations
-.PHONY: rebuild-index
-rebuild-index:
-	@echo "Rebuilding routing index..."
-	@docker compose exec coordinator mix semantic_fabric.rebuild_index
+mcp-curl:
+	@echo "# MCP HTTP endpoint examples (server must be running: make server)"
+	@echo ""
+	@echo "# Server info"
+	@echo "curl http://localhost:4040/mcp"
+	@echo ""
+	@echo "# List tools"
+	@echo "curl -X POST http://localhost:4040/mcp -H 'Content-Type: application/json' \\"
+	@echo "  -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}'"
+	@echo ""
+	@echo "# Initialize"
+	@echo "curl -X POST http://localhost:4040/mcp -H 'Content-Type: application/json' \\"
+	@echo "  -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{}}}'"
+	@echo ""
+	@echo "# Call tool: mosaic_status"
+	@echo "curl -X POST http://localhost:4040/mcp -H 'Content-Type: application/json' \\"
+	@echo "  -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"mosaic_status\",\"arguments\":{}}}'"
+	@echo ""
+	@echo "# SSE streaming"
+	@echo "curl -X POST http://localhost:4040/mcp -H 'Content-Type: application/json' \\"
+	@echo "  -H 'Accept: text/event-stream' \\"
+	@echo "  -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"params\":{}}'"
 
-.PHONY: recompute-pagerank
-recompute-pagerank:
-	@echo "Recomputing PageRank..."
-	@docker compose exec coordinator mix semantic_fabric.recompute_pagerank
-
-.PHONY: migrate-shards
-migrate-shards:
-	@echo "Migrating shards..."
-	@docker compose exec coordinator mix semantic_fabric.migrate_shards
-
-.PHONY: export-metrics
-export-metrics:
-	@echo "Exporting metrics..."
-	@curl -s http://localhost:9090/api/v1/query?query=up > metrics_export.json
-	@echo "Metrics exported to metrics_export.json"
-
-.PHONY: benchmark
-benchmark:
-	@echo "Running benchmark..."
-	@./benchmark.sh
-
-# Docker management
-.PHONY: prune
-prune:
-	@echo "Pruning unused Docker resources..."
-	@docker system prune -f
-	@docker volume prune -f
-
-.PHONY: images
-images:
-	@docker images | grep semantic-fabric
-
-.PHONY: volumes
-volumes:
-	@docker volume ls | grep semantic-fabric
-
-# Network troubleshooting
-.PHONY: network-inspect
-network-inspect:
-	@docker network inspect semantic-fabric_semantic-fabric
-
-.PHONY: ping-test
-ping-test:
-	@echo "Testing connectivity..."
-	@docker compose exec coordinator ping -c 3 worker-1
-	@docker compose exec coordinator ping -c 3 worker-2
-	@docker compose exec coordinator ping -c 3 redis
-
-# Configuration
-.PHONY: config-validate
-config-validate:
-	@echo "Validating configuration..."
-	@docker compose config
-
-.PHONY: env-check
-env-check:
-	@echo "Checking environment configuration..."
-	@test -f .env || (echo "ERROR: .env file not found" && exit 1)
-	@echo "✓ .env file exists"
-	@grep -q OPENAI_API_KEY .env && echo "✓ OPENAI_API_KEY configured" || echo "⚠ OPENAI_API_KEY not set"
-	@grep -q CLUSTER_SECRET .env && echo "✓ CLUSTER_SECRET configured" || echo "⚠ CLUSTER_SECRET not set"
+# ── Matryoshka Integration Demo ──────────────────────────────────
+integration:
+	@echo "============================================"
+	@echo "  Matryoshka × MosaicDB Integration"
+	@echo "============================================"
+	@echo ""
+	@echo "Architecture:"
+	@echo ""
+	@echo "  Matryoshka (yogthos)          MosaicDB (this repo)"
+	@echo "  ┌──────────────────┐          ┌──────────────────────┐"
+	@echo "  │ LLM Reasoning    │          │ Persistent Graph DB  │"
+	@echo "  │ Nucleus S-expr   │──MCP──▶  │ Recursive CTE Search │"
+	@echo "  │ Lattice/miniKanren│         │ Cascaded Vec Search  │"
+	@echo "  │ RLM FSM Loop     │          │ Handle Registry      │"
+	@echo "  │ Tree-sitter syms │          │ Federated Shards     │"
+	@echo "  └──────────────────┘          └──────────────────────┘"
+	@echo ""
+	@echo "Matryoshka calls mosaic_* tools via MCP to persist"
+	@echo "code graph data, traverse relationships, and search"
+	@echo "semantically — all backed by SQLite shards."
+	@echo ""
+	@echo "Run 'make mcp-curl' to see the MCP HTTP commands"
+	@echo "Matryoshka would invoke."
+	@echo ""
+	@echo "Run 'make demo' for the full pipeline."
