@@ -1,0 +1,54 @@
+# MosaicDB Helm Chart
+# helm install mosaicdb ./charts/mosaicdb --set persistence.enabled=true
+
+replicaCount: 1
+
+image:
+  repository: mosaicdb
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 4040
+
+ingress:
+  enabled: false
+  className: nginx
+  hosts:
+    - host: mosaicdb.local
+      paths:
+        - path: /
+          pathType: Prefix
+
+persistence:
+  enabled: true
+  size: 50Gi
+
+resources:
+  requests: { memory: "2Gi", cpu: "1000m" }
+  limits: { memory: "8Gi", cpu: "4000m" }
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+
+config:
+  storagePath: /var/lib/mosaic/shards
+  routingDbPath: /var/lib/mosaic/config/index.db
+  indexStrategy: hnsw
+  cacheBackend: ets
+  mcpEnabled: false
+
+redis:
+  enabled: false
+  url: "redis://redis:6379/1"
+
+monitoring:
+  serviceMonitor:
+    enabled: false
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

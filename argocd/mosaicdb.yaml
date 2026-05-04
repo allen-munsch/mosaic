@@ -1,0 +1,30 @@
+# ArgoCD Application for MosaicDB
+# kubectl apply -f argocd/mosaicdb.yaml
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mosaicdb
+  namespace: argocd
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/allen-munsch/mosaic
+    targetRevision: main
+    path: charts/mosaicdb
+    helm:
+      values: |
+        replicaCount: 3
+        persistence: { enabled: true, size: "100Gi" }
+        ingress: { enabled: true, hosts: [{ host: mosaicdb.example.com, paths: [{ path: /, pathType: Prefix }] }] }
+        autoscaling: { enabled: true, minReplicas: 3, maxReplicas: 10 }
+        resources: { requests: { memory: "4Gi", cpu: "2000m" }, limits: { memory: "16Gi", cpu: "8000m" } }
+        config: { mcpEnabled: true, cacheBackend: redis }
+        redis: { enabled: true, url: "redis://redis-master:6379/1" }
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: mosaicdb
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

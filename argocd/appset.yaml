@@ -1,0 +1,67 @@
+# ── ApplicationSet for multi-environment MosaicDB ──────────────
+# Automatically deploys to dev/staging/prod from branch patterns.
+# Apply: kubectl apply -f argocd/appset.yaml
+
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: mosaicdb
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - env: dev
+            namespace: mosaicdb-dev
+            replicas: "1"
+            storage: "10Gi"
+          - env: staging
+            namespace: mosaicdb-staging
+            replicas: "2"
+            storage: "50Gi"
+          - env: prod
+            namespace: mosaicdb-prod
+            replicas: "3"
+            storage: "200Gi"
+  template:
+    metadata:
+      name: "mosaicdb-{{ env }}"
+      labels:
+        env: "{{ env }}"
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/allen-munsch/mosaic
+        targetRevision: main
+        path: charts/mosaicdb
+        helm:
+          values: |
+            replicaCount: {{ replicas }}
+            persistence:
+              enabled: true
+              size: {{ storage }}
+            ingress:
+              enabled: true
+              hosts:
+                - host: "mosaicdb-{{ env }}.example.com"
+                  paths:
+                    - path: /
+                      pathType: Prefix
+            config:
+              cacheBackend: redis
+              mcpEnabled: true
+            redis:
+              enabled: true
+              url: "redis://redis-{{ env }}:6379/1"
+            monitoring:
+              serviceMonitor:
+                enabled: true
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{ namespace }}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

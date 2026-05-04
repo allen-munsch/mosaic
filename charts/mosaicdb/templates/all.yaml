@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mosaicdb.fullname" . }}
+  labels: {{ include "mosaicdb.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: {{ include "mosaicdb.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{ include "mosaicdb.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: mosaicdb
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.port }}
+              name: http
+          env:
+            - name: PORT
+              value: {{ .Values.service.port | quote }}
+            - name: STORAGE_PATH
+              value: {{ .Values.config.storagePath | quote }}
+            - name: MOSAIC_QUIET
+              value: "1"
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources: {{ toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - mountPath: {{ .Values.config.storagePath }}
+              name: shards
+      volumes:
+        - name: shards
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "mosaicdb.fullname" . }}-shards
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mosaicdb.fullname" . }}
+  labels: {{ include "mosaicdb.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: http
+      name: http
+  selector: {{ include "mosaicdb.selectorLabels" . | nindent 4 }}
+{{- if .Values.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "mosaicdb.fullname" . }}-shards
+  labels: {{ include "mosaicdb.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}
+{{- end }}

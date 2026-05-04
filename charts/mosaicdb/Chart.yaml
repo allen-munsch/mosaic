@@ -1,0 +1,12 @@
+apiVersion: v2
+name: mosaicdb
+description: Federated SQL Semantic Search & Analytics Engine with DuckDB, SQLite shards, Graph DB, and MCP server
+type: application
+version: 0.2.0
+appVersion: "0.2.0"
+keywords: [search, vector-search, semantic-search, rag, analytics, mcp, duckdb, sqlite, graph-database]
+home: https://github.com/allen-munsch/mosaic
+sources: [https://github.com/allen-munsch/mosaic]
+maintainers:
+  - name: MosaicDB Maintainers
+icon: https://raw.githubusercontent.com/allen-munsch/mosaic/main/docs/mosaicdb-logo-orange.jpg
