@@ -30,7 +30,7 @@ defmodule Mosaic.Reify.Parser do
 
   defp tokenize(sexpr) do
     sexpr
-    |> String.replace(~r/;.*$/, "")  # strip comments
+    |> String.replace(~r/;;.*$(\n|\r\n)?/m, "")  # strip comments
     |> tokenize_chars([])
     |> Enum.reverse()
   end

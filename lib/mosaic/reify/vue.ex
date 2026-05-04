@@ -14,11 +14,9 @@ defmodule Mosaic.Reify.Vue do
   @impl true
   def transpile(ast, opts \\ []) do
     component_name = Keyword.get(opts, :component_name, "ReifiedComponent")
-    script_setup = Keyword.get(opts, :script_setup, true)
     typescript = Keyword.get(opts, :typescript, false)
 
     template = ast_to_template(ast, 0, 2)
-
     lang_attr = if typescript, do: " lang=\"ts\"", else: ""
 
     {:ok, """
@@ -27,11 +25,11 @@ defmodule Mosaic.Reify.Vue do
 </template>
 
 <script setup#{lang_attr}>
-// Props, emits, and logic go here
+// #{component_name} — Props, emits, and logic go here
 </script>
 
 <style scoped>
-/* Component styles */
+/* #{component_name} styles */
 </style>
 """ |> String.trim()}
   end

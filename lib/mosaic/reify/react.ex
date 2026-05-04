@@ -1,287 +1,214 @@
 defmodule Mosaic.Reify.React do
   @moduledoc """
-  S-Expression → React/JSX transpiler.
+  S-Expression AST → React/JSX transpiler with full expression support.
 
-  Converts the reify component DSL into React JSX (or TSX).
-  Based on allen-munsch's reifyReact design.
-
-  ## Tag Mappings
-
-      (button ...)  → <button ...>
-      (h1 ...)      → <h1 ...>
-      (text ...)    → <p ...>
-      (section ...) → <section ...>
-
-  ## Attribute Mappings (:keyword value)
-
-      :variant primary  → data-variant="primary"
-      :size lg          → data-size="lg"
-      :on-click fn      → onClick={fn}
-      :to "/path"       → href="/path"
-      :src "img.png"    → src="img.png"
-
-  ## Styles (inline mapping to Tailwind by default)
-
-      :bg white         → className="bg-white"
-      :font-size 2rem   → className="text-2xl"
-      :padding 2rem     → className="p-8"
+  Handles: conditionals (if), loops (foreach), expressions (equals, count,
+  concat, toString), event handlers, style blocks, and component composition.
+  Produces clean, idiomatic React JSX with proper indentation.
   """
 
   @behaviour Mosaic.Reify.Plugin
 
-  # ── Tag Map ────────────────────────────────────────────────────
+  alias Mosaic.Reify.AST, as: AST
 
   @tag_map %{
-    "page" => "div",
-    "header" => "header",
-    "main" => "main",
-    "section" => "section",
-    "footer" => "footer",
-    "nav" => "nav",
-    "aside" => "aside",
-    "card" => "div",
-    "form" => "form",
-    "button" => "button",
-    "text" => "p",
-    "span" => "span",
-    "link" => "a",
-    "h1" => "h1", "h2" => "h2", "h3" => "h3",
-    "h4" => "h4", "h5" => "h5", "h6" => "h6",
-    "img" => "img",
-    "input" => "input",
-    "select" => "select",
-    "icon" => "span",
-    "badge" => "span",
-    "price" => "span",
-    "list" => "ul",
-    "item" => "li",
-    "divider" => "hr",
-    "label" => "label",
-    "textarea" => "textarea",
-    "details" => "div",
-    "summary" => "summary",
-    "logo" => "div",
-    "gallery" => "div",
-    "breadcrumbs" => "nav",
-    "crumb" => "span",
-    "rating" => "div",
-    "search-bar" => "div",
+    "page" => "div", "header" => "header", "main" => "main", "section" => "section",
+    "footer" => "footer", "nav" => "nav", "aside" => "aside",
+    "card" => "div", "form" => "form", "button" => "button",
+    "text" => "p", "span" => "span", "link" => "a",
+    "h1" => "h1", "h2" => "h2", "h3" => "h3", "h4" => "h4", "h5" => "h5", "h6" => "h6",
+    "img" => "img", "input" => "input", "select" => "select",
+    "textarea" => "textarea", "label" => "label",
+    "icon" => "span", "badge" => "span", "price" => "span",
+    "list" => "ul", "item" => "li", "divider" => "hr",
+    "checkbox" => "input", "tabs" => "div", "tab" => "button",
+    "details" => "div", "summary" => "summary",
+    "gallery" => "div", "breadcrumbs" => "nav", "crumb" => "span",
+    "rating" => "div", "search-bar" => "input", "modal" => "div",
+    "drawer" => "div", "logo" => "div", "quantity-selector" => "div",
   }
-
-  # ── Attribute Map ──────────────────────────────────────────────
 
   @attr_map %{
-    ":variant" => "data-variant",
-    ":size" => "data-size",
-    ":width" => "data-width",
-    ":count" => "data-count",
-    ":on-click" => "onClick",
-    ":on-change" => "onChange",
-    ":on-submit" => "onSubmit",
-    ":on-focus" => "onFocus",
-    ":on-blur" => "onBlur",
-    ":on-hover" => "onMouseEnter",
-    ":on-input" => "onInput",
-    ":src" => "src",
-    ":alt" => "alt",
-    ":href" => "href",
-    ":to" => "href",
-    ":placeholder" => "placeholder",
-    ":value" => "value",
-    ":disabled" => "disabled",
-    ":required" => "required",
-    ":min" => "min",
-    ":max" => "max",
-    ":type" => "type",
-    ":name" => "name",
-    ":id" => "id",
-    ":class" => "className",
-    ":title" => "title",
-    ":role" => "role",
-    ":sticky" => "data-sticky",
-    ":lightbox" => "data-lightbox",
-    ":shadow" => "data-shadow",
-    ":current" => "aria-current",
-    ":layout" => "data-layout",
-    ":gap" => "data-gap",
-    ":bg" => "data-bg",
-    ":color" => "data-color",
+    ":variant" => "data-variant", ":size" => "data-size",
+    ":width" => "data-width", ":count" => "data-count",
+    ":on-click" => "onClick", ":on-change" => "onChange",
+    ":on-submit" => "onSubmit", ":on-focus" => "onFocus",
+    ":on-blur" => "onBlur", ":on-hover" => "onMouseEnter",
+    ":on-input" => "onInput", ":src" => "src", ":alt" => "alt",
+    ":href" => "href", ":to" => "href", ":placeholder" => "placeholder",
+    ":value" => "value", ":disabled" => "disabled", ":required" => "required",
+    ":min" => "min", ":max" => "max", ":type" => "type", ":name" => "name",
+    ":id" => "id", ":class" => "className", ":title" => "title",
+    ":checked" => "checked",
+    ":key" => "key",
+    ":padding" => "data-padding", ":margin" => "data-margin",
+    ":margin-top" => "data-margin-top", ":margin-bottom" => "data-margin-bottom",
+    ":margin-x" => "data-margin-x", ":margin-y" => "data-margin-y",
+    ":padding-top" => "data-padding-top",
+    ":max-width" => "data-max-width",
+    ":text-align" => "data-text-align", ":text-decoration" => "data-text-decoration",
+    ":font-size" => "data-font-size", ":font-weight" => "data-font-weight",
+    ":color" => "data-color", ":bg" => "data-bg",
+    ":shadow" => "data-shadow", ":radius" => "data-radius",
+    ":border" => "data-border", ":border-top" => "data-border-top",
+    ":border-color" => "data-border-color",
+    ":flex" => "data-flex", ":gap" => "data-gap",
+    ":align" => "data-align", ":justify" => "data-justify",
+    ":style-type" => "data-style-type",
+    ":sticky" => "data-sticky", ":current" => "aria-current",
+    ":layout" => "data-layout", ":lightbox" => "data-lightbox",
   }
+
+  @self_closing ~w(img input hr br)
 
   @impl true
   def name, do: :react
 
   @impl true
-  def transpile(ast, opts \\ []) do
-    indent = Keyword.get(opts, :indent, 2)
-    typescript = Keyword.get(opts, :typescript, false)
-    component_name = Keyword.get(opts, :component_name)
+  def transpile(ast, opts \\ [])
 
-    jsx = ast_to_jsx(ast, 0, indent)
-    imports = collect_imports(ast)
+  def transpile(ast, opts) when is_list(ast) do
+    transpile(AST.from_sexpr(ast), opts)
+  end
+
+  def transpile(%AST.Node{} = node, opts) do
+    indent = Keyword.get(opts, :indent, 2)
+    component_name = Keyword.get(opts, :component_name)
+    typescript = Keyword.get(opts, :typescript, false)
+
+    body = node_to_jsx(node, 0, indent)
+    imports = collect_imports(node)
 
     code = if component_name do
       """
-#{if typescript, do: "import React from 'react';", else: "import React from 'react';"}
-#{Enum.join(imports, "\n")}
+      #{Enum.join(imports, "\n")}
 
-#{if typescript, do: "export const #{component_name}: React.FC = () => (", else: "export const #{component_name} = () => ("}
-#{jsx}
-);
-"""
+      #{if typescript, do: "export const #{component_name}: React.FC = () => (", else: "export const #{component_name} = () => ("}
+      #{body}
+      );
+      """
     else
-      jsx
+      body
     end
 
     {:ok, String.trim(code)}
   end
 
-  # ── AST → JSX ──────────────────────────────────────────────────
+  def transpile(other, _opts), do: {:ok, inspect(other)}
 
-  defp ast_to_jsx([tag | rest], depth, indent) when is_binary(tag) do
-    {attrs, children} = split_attrs_and_children(rest)
+  # ── Node → JSX ────────────────────────────────────────────────
+
+  defp node_to_jsx(%AST.Node{tag: tag, attrs: attrs, children: children}, depth, indent) do
     element = Map.get(@tag_map, tag, tag)
+    rendered_attrs = render_attrs(attrs, depth, indent)
 
-    # Handle self-closing tags
-    if children == [] and tag in ~w(img input hr br) do
-      "#{pad(depth, indent)}<#{element}#{render_attrs(attrs, depth, indent)} />"
+    if children == [] and element in @self_closing do
+      "#{pad(depth)}<#{element}#{rendered_attrs} />"
     else
       child_jsx = render_children(children, depth + 1, indent)
 
-      if child_jsx == "" do
-        "#{pad(depth, indent)}<#{element}#{render_attrs(attrs, depth, indent)}></#{element}>"
+      if String.trim(child_jsx) == "" do
+        "#{pad(depth)}<#{element}#{rendered_attrs}></#{element}>"
       else
-        "#{pad(depth, indent)}<#{element}#{render_attrs(attrs, depth, indent)}>\n#{child_jsx}\n#{pad(depth, indent)}</#{element}>"
+        "#{pad(depth)}<#{element}#{rendered_attrs}>\n#{child_jsx}\n#{pad(depth)}</#{element}>"
       end
     end
   end
 
-  defp ast_to_jsx(text, depth, indent) when is_binary(text) do
-    "#{pad(depth, indent)}#{text}"
+  defp node_to_jsx(%AST.Expr{type: :if, args: [cond, then_expr, else_expr]}, depth, indent) do
+    cond_js = expr_to_js(cond)
+    then_jsx = node_to_jsx(then_expr, depth + 1, indent)
+
+    if else_expr do
+      else_jsx = node_to_jsx(else_expr, depth + 1, indent)
+      "#{pad(depth)}{#{cond_js} ? (\n#{then_jsx}\n#{pad(depth)}) : (\n#{else_jsx}\n#{pad(depth)})}"
+    else
+      "#{pad(depth)}{#{cond_js} && (\n#{then_jsx}\n#{pad(depth)})}"
+    end
   end
 
-  defp ast_to_jsx(num, depth, indent) when is_number(num) do
-    "#{pad(depth, indent)}#{num}"
+  defp node_to_jsx(%AST.Expr{type: :foreach, args: [var, coll, body]}, depth, indent) do
+    coll_js = expr_to_js(coll)
+    inner = node_to_jsx(body, depth + indent, indent)
+    "#{pad(depth)}{#{coll_js}.map((#{var}) => (\n#{inner}\n#{pad(depth)}))}"
   end
 
-  defp ast_to_jsx(_nil, _depth, _indent), do: ""
+  defp node_to_jsx(text, depth, _indent) when is_binary(text), do: "#{pad(depth)}{#{inspect(text)}}"
+  defp node_to_jsx(num, depth, _indent) when is_number(num), do: "#{pad(depth)}{#{num}}"
+  defp node_to_jsx(nil, _depth, _indent), do: ""
 
-  # ── Attribute Handling ─────────────────────────────────────────
+  # ── Expression → JavaScript ───────────────────────────────────
 
-  defp split_attrs_and_children(items) do
-    split_attrs_and_children(items, [], [])
+  defp expr_to_js(%AST.Expr{type: :equals, args: [a, b]}), do: "#{expr_to_js(a)} === #{expr_to_js(b)}"
+  defp expr_to_js(%AST.Expr{type: :not, args: [a]}), do: "!#{expr_to_js(a)}"
+  defp expr_to_js(%AST.Expr{type: :count, args: [coll]}), do: "#{expr_to_js(coll)}.length"
+  defp expr_to_js(%AST.Expr{type: :concat, args: [a, b]}), do: "#{expr_to_js(a)} + #{expr_to_js(b)}"
+  defp expr_to_js(%AST.Expr{type: :toString, args: [a]}), do: "String(#{expr_to_js(a)})"
+  defp expr_to_js(v) when is_binary(v) do
+    # If it looks like a property access (contains '.'), treat as expression
+    # Otherwise wrap in quotes as a string literal
+    if String.contains?(v, ".") or String.match?(v, ~r/^[a-z][A-Z]/) do
+      v
+    else
+      # Check if it's a known variable reference or a literal string
+      # Heuristic: single lowercase word → variable, multi-word or mixed case → string
+      if String.match?(v, ~r/^[a-z_][a-zA-Z0-9_]*$/) and v not in ~w(true false null undefined) do
+        v
+      else
+        inspect(v)
+      end
+    end
   end
+  defp expr_to_js(v) when is_number(v), do: "#{v}"
 
-  defp split_attrs_and_children([], attrs, children) do
-    {Enum.reverse(attrs), Enum.reverse(children)}
-  end
-
-  # Keyword-value pair
-  defp split_attrs_and_children([key, value | rest], attrs, children) when is_binary(key) and key != "" and binary_part(key, 0, 1) == ":" do
-    split_attrs_and_children(rest, [{key, value} | attrs], children)
-  end
-
-  # Keyword without explicit value (boolean flag)
-  defp split_attrs_and_children([key | rest], attrs, children) when is_binary(key) and key != "" and binary_part(key, 0, 1) == ":" do
-    split_attrs_and_children(rest, [{key, true} | attrs], children)
-  end
-
-  # Style block: (styles :bg white :font bold) inside component
-  defp split_attrs_and_children([["styles" | style_attrs] | rest], attrs, children) do
-    # Convert style attributes to className
-    class_name = styles_to_classname(style_attrs)
-    split_attrs_and_children(rest, [{":class", class_name} | attrs], children)
-  end
-
-  # Nested list → child component
-  defp split_attrs_and_children([item | rest], attrs, children) when is_list(item) do
-    split_attrs_and_children(rest, attrs, [item | children])
-  end
-
-  # Plain text child
-  defp split_attrs_and_children([item | rest], attrs, children) do
-    split_attrs_and_children(rest, attrs, [item | children])
-  end
-
-  # ── Attribute Rendering ────────────────────────────────────────
+  # ── Attribute Rendering ───────────────────────────────────────
 
   defp render_attrs(attrs, _depth, _indent) do
-    rendered =
-      attrs
-      |> Enum.map(fn
-        {key, true} ->
-          attr_name = Map.get(@attr_map, key, String.replace_prefix(key, ":", ""))
-          " #{attr_name}"
+    attrs
+    |> Enum.map(fn %AST.Attr{key: key, value: value} ->
+      attr_name = Map.get(@attr_map, key, String.replace_leading(key, ":", ""))
+      event? = String.starts_with?(attr_name, "on")
 
-        {key, value} when is_binary(value) ->
-          attr_name = Map.get(@attr_map, key, String.replace_prefix(key, ":", ""))
+      rendered = render_attr_value(value, event?)
 
-          # Event handlers → {handler}
-          if String.starts_with?(attr_name, "on") do
-            " #{attr_name}={#{value}}"
-          else
-            " #{attr_name}=\"#{value}\""
-          end
-
-        {key, value} ->
-          attr_name = Map.get(@attr_map, key, String.replace_prefix(key, ":", ""))
-          " #{attr_name}={#{value}}"
-      end)
-      |> Enum.join("")
-
-    rendered
+      if event? do
+        " #{attr_name}={#{rendered}}"
+      else
+        " #{attr_name}=\"#{rendered}\""
+      end
+    end)
+    |> Enum.join("")
   end
 
-  # ── Children Rendering ─────────────────────────────────────────
+  defp render_attr_value(%AST.Expr{} = expr, true), do: "(e) => #{expr_to_js(expr)}"
+  defp render_attr_value(%AST.Expr{} = expr, false), do: "{#{expr_to_js(expr)}}"
+  defp render_attr_value(v, true) when is_binary(v) do
+    # Event handlers: if looks like a variable, render as {handler}
+    # If it's a dot-notation call like "handleFilterChange" with args, keep as-is
+    v
+  end
+
+  defp render_attr_value(v, false) when is_binary(v) do
+    # Static attributes: check if value contains '.' (property access) → render as expression
+    if String.contains?(v, ".") do
+      "{#{v}}"
+    else
+      v
+    end
+  end
+  defp render_attr_value(v, _) when is_boolean(v), do: "#{v}"
+  defp render_attr_value(v, _) when is_number(v), do: "#{v}"
+
+  # ── Children Rendering ────────────────────────────────────────
 
   defp render_children(children, depth, indent) do
     children
-    |> Enum.map(fn
-      child when is_list(child) -> ast_to_jsx(child, depth, indent)
-      text when is_binary(text) -> "#{pad(depth, indent)}#{text}"
-      num when is_number(num) -> "#{pad(depth, indent)}#{num}"
-      _ -> ""
-    end)
+    |> Enum.map(&node_to_jsx(&1, depth, indent))
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n")
   end
 
-  # ── Style to Tailwind / ClassName ───────────────────────────────
+  defp collect_imports(_node), do: []
 
-  defp styles_to_classname(style_attrs) do
-    style_attrs
-    |> Enum.chunk_every(2)
-    |> Enum.map(fn
-      [key, value] -> style_to_tailwind(key, value)
-      [key] -> style_to_tailwind(key, true)
-    end)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.join(" ")
-  end
-
-  defp style_to_tailwind(key, value) do
-    case {key, value} do
-      {:bg, color} -> "bg-#{color}"
-      {:color, color} -> "text-#{color}"
-      {:font, weight} when weight in ~w(bold semibold normal light) -> "font-#{weight}"
-      {:font, _} -> ""
-      {:spacing, size} -> if is_binary(size), do: "gap-#{size}", else: ""
-      {:radius, size} -> if is_binary(size), do: "rounded-#{size}", else: ""
-      {:shadow, size} -> if is_binary(size), do: "shadow-#{size}", else: ""
-      {:animate, type} -> if is_binary(type), do: "animate-#{type}", else: ""
-      {:aspect_ratio, _} -> "aspect-square"
-      {:layout, _} -> ""
-      _ -> ""
-    end
-  end
-
-  # ── Imports ────────────────────────────────────────────────────
-
-  defp collect_imports(_ast), do: []
-
-  # ── Helpers ────────────────────────────────────────────────────
-
-  defp pad(depth, indent) do
-    String.duplicate(" ", depth * indent)
-  end
+  defp pad(depth), do: String.duplicate(" ", depth)
 end

@@ -62,6 +62,7 @@ case "$cmd" in
     ;;
 
   # ── Servers ─────────────────────────────────────────────────
+  dev) echo "Starting dev server with hot reload..."; $RUNNER run -e 'Mix.Tasks.Mosaic.Dev.run(System.argv())' "${@}" 2>/dev/null ;;
   mcp) echo "Starting MCP server..."; $RUNNER eval 'Mix.Tasks.Mosaic.Mcp.run([])' 2>/dev/null ;;
   server) echo "Starting HTTP server on :4040..."; $RUNNER run --no-halt 2>/dev/null ;;
   demo) $RUNNER run scripts/demo.exs 2>&1 | quiet_filter ;;
