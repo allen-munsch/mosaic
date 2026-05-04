@@ -85,9 +85,9 @@ defmodule Mosaic.Reify do
   end
 
   @doc "Transpile and store as a cached component in the graph."
-  def reify_and_cache(sexpr, framework, name, opts \\ []) do
-    with {:ok, code} <- transpile(sexpr, framework, opts) do
-      Mosaic.Reify.Cache.store(name, sexpr, code, framework, opts)
+  def reify_and_cache(sexpr, framework, name, reify_opts \\ []) do
+    with {:ok, code} <- transpile(sexpr, framework, reify_opts) do
+      Mosaic.Reify.Cache.store(name, sexpr, code, framework, reify_opts)
     end
   end
 end

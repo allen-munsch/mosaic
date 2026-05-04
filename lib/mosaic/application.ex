@@ -15,12 +15,9 @@ defmodule Mosaic.Application do
       Logger.configure(level: :warning)
     end
     Logger.info("Starting MosaicDB")
-    if !Mosaic.Config.get(:startup_quiet) do
-      IO.inspect(Application.get_all_env(:mosaic), label: "All config")
-    end
 
     children = [
-      # Cluster coordination
+      # Cluster coordination (libcluster + :ra consensus)
       {Cluster.Supervisor, [topologies(), [name: Mosaic.ClusterSupervisor]]},
 
       # Storage layer
@@ -32,24 +29,11 @@ defmodule Mosaic.Application do
       # Cache (ETS or Redis based on config)
       cache_child_spec(),
 
-      # Shard routing
-      # {Mosaic.ShardRouter, []}, # Replaced by the chosen index strategy
-      # {Mosaic.BloomFilterManager, []}, # These are now managed by the strategy
-      # {Mosaic.RoutingMaintenance, []}, # These are now managed by the strategy
-
       index_strategy_child_spec(),
 
-      # Embeddings
-      {Nx.Serving,
-        serving: create_embedding_serving(),
-        name: MosaicEmbedding,
-        batch_size: 16,
-        batch_timeout: 100},
+      # Embeddings (configurable via MOSAIC_EMBEDDING_MODEL_NAME / embedding_model_name)
+      {Mosaic.EmbeddingService, []},
       {Mosaic.EmbeddingCache, []},
-
-      # Indexer (manages active shard for document ingestion)
-      # Handled by the selected index strategy now.
-      # {Mosaic.Indexer, []},
 
       # HOT PATH: Query engine (SQLite + sqlite-vec)
       {Mosaic.QueryEngine, [
@@ -57,10 +41,7 @@ defmodule Mosaic.Application do
         cache_ttl: Mosaic.Config.get(:query_cache_ttl_seconds),
         ranker: Mosaic.Ranking.Ranker.new(ranker_config()),
         index_strategy: Mosaic.Config.get(:index_strategy)
-      ] |> then(fn opts ->
-        if !Mosaic.Config.get(:startup_quiet), do: IO.inspect(opts, label: "QueryEngine child spec opts")
-        opts
-      end)},
+      ]},
 
       # WARM PATH: Analytics engine (DuckDB)
       {Mosaic.DuckDBBridge, []},
@@ -87,17 +68,34 @@ defmodule Mosaic.Application do
       children
     end
 
+    # Auth & Multi-tenancy initialization
+    if Mosaic.Config.get(:auth_enabled) or Mosaic.Config.get(:tenancy_enabled) do
+      Mosaic.Auth.APIKey.init_auth_db()
+      Mosaic.Tenancy.Isolator.init_system()
+    end
+
+    # Distributed consensus layer (:ra Raft)
+    if Mosaic.Config.get(:consensus_enabled) do
+      Mosaic.Consensus.Cluster.start_cluster()
+    end
+
+    # Run pending database migrations
+    if Mosaic.Config.get(:auto_migrate, true) do
+      run_pending_migrations()
+    end
+
     configure_nx_backend()
     Supervisor.start_link(children, strategy: :one_for_one, name: Mosaic.Supervisor)
   end
 
-  defp create_embedding_serving do
-    {:ok, model_info} = Bumblebee.load_model({:hf, "sentence-transformers/all-MiniLM-L6-v2"})
-    {:ok, tokenizer} = Bumblebee.load_tokenizer({:hf, "sentence-transformers/all-MiniLM-L6-v2"})
-    Bumblebee.Text.text_embedding(model_info, tokenizer,
-      compile: [batch_size: 16, sequence_length: 256],
-      defn_options: [compiler: EXLA]
-    )
+  defp run_pending_migrations do
+    storage_path = Mosaic.Config.get(:storage_path)
+    if File.dir?(storage_path) do
+      Path.wildcard(Path.join(storage_path, "*.db"))
+      |> Enum.each(fn shard_path ->
+        Mosaic.Migrations.apply(shard_path)
+      end)
+    end
   end
 
   defp configure_nx_backend do
@@ -157,9 +155,6 @@ defmodule Mosaic.Application do
 
   defp index_strategy_child_spec do
     strategy_name = Mosaic.Config.get(:index_strategy)
-    if !Mosaic.Config.get(:startup_quiet) do
-      IO.inspect(strategy_name, label: "index_strategy_child_spec: strategy_name")
-    end
     strategy_module = case strategy_name do
       "binary" -> Mosaic.Index.Strategy.Binary
       "centroid" -> Mosaic.Index.Strategy.Centroid
@@ -175,35 +170,18 @@ defmodule Mosaic.Application do
   end
 
   defp get_strategy_opts("hnsw") do
-    [
-      m: Mosaic.Config.get(:hnsw_m),
-      ef_construction: Mosaic.Config.get(:hnsw_ef_construction),
-      ef_search: Mosaic.Config.get(:hnsw_ef_search),
-      distance_fn: Mosaic.Config.get(:hnsw_distance_fn)
-    ]
+    [m: Mosaic.Config.get(:hnsw_m), ef_construction: Mosaic.Config.get(:hnsw_ef_construction),
+     ef_search: Mosaic.Config.get(:hnsw_ef_search), distance_fn: Mosaic.Config.get(:hnsw_distance_fn)]
   end
-
   defp get_strategy_opts("binary") do
-    [
-      bits: Mosaic.Config.get(:binary_bits),
-      quantization: Mosaic.Config.get(:binary_quantization)
-    ]
+    [bits: Mosaic.Config.get(:binary_bits), quantization: Mosaic.Config.get(:binary_quantization)]
   end
-
   defp get_strategy_opts("ivf") do
-    [
-      n_lists: Mosaic.Config.get(:ivf_n_lists),
-      n_probe: Mosaic.Config.get(:ivf_n_probe)
-    ]
+    [n_lists: Mosaic.Config.get(:ivf_n_lists), n_probe: Mosaic.Config.get(:ivf_n_probe)]
   end
-
   defp get_strategy_opts("pq") do
-    [
-      m: Mosaic.Config.get(:pq_m),
-      k_sub: Mosaic.Config.get(:pq_k_sub)
-    ]
+    [m: Mosaic.Config.get(:pq_m), k_sub: Mosaic.Config.get(:pq_k_sub)]
   end
-
   defp get_strategy_opts(_), do: []
 
   defp port, do: System.get_env("PORT", "4040") |> String.to_integer()

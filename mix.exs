@@ -5,7 +5,7 @@ defmodule Mosaic.MixProject do
     [
       app: :mosaic,
       version: "0.2.0",
-      elixir: "~> 1.20.0-rc.0",
+      elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       releases: releases(),
@@ -41,7 +41,8 @@ defmodule Mosaic.MixProject do
       {:mox, "~> 1.0", only: :test},
       {:redix, "~> 1.0"},
       {:poolboy, "~> 1.5"},
-      {:duckdbex, "~> 0.3.18"}
+      {:duckdbex, "~> 0.3.18"},
+      {:ra, "~> 2.11"}
     ]
   end
 

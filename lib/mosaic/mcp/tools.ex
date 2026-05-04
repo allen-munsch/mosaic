@@ -94,6 +94,77 @@ defmodule Mosaic.MCP.Tools do
         properties: %{
           god_nodes: %{type: "integer", description: "Number of top hub nodes (default: 10)"},
           bridge_nodes: %{type: "integer", description: "Number of bridge nodes (default: 10)"}
+        }),
+
+      tool("mosaic_memory_remember", "Store a memory for an AI agent session. Memories persist across sessions and survive restarts.",
+        required: ["session_id", "content"],
+        properties: %{
+          session_id: %{type: "string", description: "Agent session ID"},
+          content: %{type: "string", description: "Text content to remember"},
+          type: %{type: "string", description: "Memory type: episodic, semantic, or procedural (default: episodic)"},
+          tags: %{type: "array", items: %{type: "string"}, description: "Tags for categorization"},
+          importance: %{type: "number", description: "Importance 0.0-1.0 (default: 0.5)"}
+        }),
+
+      tool("mosaic_memory_recall", "Recall memories for an agent session using hybrid semantic + graph retrieval. Returns compact handle stubs for token efficiency.",
+        required: ["session_id", "query"],
+        properties: %{
+          session_id: %{type: "string", description: "Agent session ID"},
+          query: %{type: "string", description: "What to recall about (natural language)"},
+          limit: %{type: "integer", description: "Max memories (default: 10)"},
+          types: %{type: "array", items: %{type: "string"}, description: "Filter: episodic, semantic, procedural"}
+        }),
+
+      tool("mosaic_memory_consolidate", "Consolidate old episodic memories into compact semantic facts. Reduces memory footprint and improves recall quality.",
+        required: ["session_id"],
+        properties: %{
+          session_id: %{type: "string", description: "Agent session ID"},
+          older_than_hours: %{type: "integer", description: "Only consolidate memories older than this many hours (default: 24)"}
+        }),
+
+      tool("mosaic_memory_stats", "Get memory statistics for an agent session: total, episodic, semantic, procedural count.",
+        required: ["session_id"],
+        properties: %{
+          session_id: %{type: "string", description: "Agent session ID"}
+        }),
+
+      # ── Agent Fabric: Sandbox Execution ──────────────────────
+
+      tool("fabric_sandbox_run", "Execute code in a secure OCI-compliant Firecracker microVM sandbox. Results are automatically stored in the fabric memory as handles and graph nodes for later retrieval. Uses Zypi as the sandbox runtime.",
+        required: ["cmd"],
+        properties: %{
+          cmd: %{type: "array", items: %{type: "string"}, description: "Command to execute (e.g., ['python', 'script.py'])"},
+          image: %{type: "string", description: "OCI image to use (default: ubuntu:24.04)"},
+          agent_id: %{type: "string", description: "Agent ID for memory attribution"},
+          env: %{type: "object", description: "Environment variables"},
+          workdir: %{type: "string", description: "Working directory"},
+          timeout: %{type: "integer", description: "Timeout in seconds (default: 30)"},
+          memory_mb: %{type: "integer", description: "Memory limit in MB (default: 256)"},
+          vcpus: %{type: "integer", description: "vCPU count (default: 1)"},
+          files: %{type: "object", description: "Files to inject into sandbox (path => content)"}
+        }),
+
+      tool("fabric_sandbox_session", "Manage a long-lived sandbox session: create, exec, or close. Sessions survive multiple commands, useful for multi-step agent workflows.",
+        required: ["action"],
+        properties: %{
+          action: %{type: "string", description: "Action: create, exec, or close"},
+          session_id: %{type: "string", description: "Session ID (required for exec and close)"},
+          cmd: %{type: "array", items: %{type: "string"}, description: "Command to execute (for exec action)"},
+          image: %{type: "string", description: "OCI image (for create action, default: ubuntu:24.04)"},
+          agent_id: %{type: "string", description: "Agent ID for memory attribution"},
+          env: %{type: "object", description: "Environment variables"},
+          workdir: %{type: "string", description: "Working directory"},
+          timeout: %{type: "integer", description: "Command timeout in seconds"}
+        }),
+
+      tool("fabric_agent_observe", "Observe the agent memory fabric: list all agents, their memory graphs, execution history, sandbox usage, and fabric topology. The 'self-reflection' tool for agents.",
+        required: [],
+        properties: %{
+          agent_id: %{type: "string", description: "Filter to a specific agent"},
+          include_memories: %{type: "boolean", description: "Include recent memories (default: true)"},
+          include_executions: %{type: "boolean", description: "Include execution history (default: true)"},
+          include_graph: %{type: "boolean", description: "Include graph topology stats (default: true)"},
+          memory_limit: %{type: "integer", description: "Max memories to return per agent (default: 10)"}
         })
     ]
   end
@@ -263,6 +334,75 @@ defmodule Mosaic.MCP.Tools do
 
       {:error, reason} ->
         {:error, inspect(reason)}
+    end
+  end
+
+  def call_tool("mosaic_memory_remember", args) do
+    session_id = Map.get(args, "session_id", "")
+    content = Map.get(args, "content", "")
+    type = parse_atom(args, "type") || :episodic
+    tags = Map.get(args, "tags", [])
+    importance = Map.get(args, "importance", 0.5)
+
+    if session_id == "" or content == "" do
+      {:error, "session_id and content are required"}
+    else
+      case Mosaic.Memory.AgentMemory.remember(session_id, content,
+             type: type, tags: tags, importance: importance) do
+        {:ok, memory, stub} ->
+          {:ok, "#{stub}\n\n#{Jason.encode!(%{memory_id: memory.id, type: memory.type, created_at: memory.created_at})}"}
+        error -> error
+      end
+    end
+  end
+
+  def call_tool("mosaic_memory_recall", args) do
+    session_id = Map.get(args, "session_id", "")
+    query = Map.get(args, "query", "")
+    limit = Map.get(args, "limit", 10)
+    types = Map.get(args, "types")
+    types_atoms = if is_list(types), do: Enum.map(types, &String.to_atom/1), else: nil
+
+    if session_id == "" or query == "" do
+      {:error, "session_id and query are required"}
+    else
+      case Mosaic.Memory.AgentMemory.recall(session_id, query,
+             limit: limit, types: types_atoms) do
+        {:ok, memories, handle} ->
+          top = memories |> Enum.take(5) |> Enum.map(&Map.take(&1, [:id, :content, :type, :similarity, :score]))
+          {:ok, "#{handle}\n\n#{Jason.encode!(%{count: length(memories), top_memories: top})}"}
+        error -> error
+      end
+    end
+  end
+
+  def call_tool("mosaic_memory_consolidate", args) do
+    session_id = Map.get(args, "session_id", "")
+    older_than_hours = Map.get(args, "older_than_hours", 24)
+
+    if session_id == "" do
+      {:error, "session_id is required"}
+    else
+      case Mosaic.Memory.AgentMemory.consolidate(session_id,
+             older_than: older_than_hours * 3600 * 1000) do
+        {:ok, result} ->
+          {:ok, Jason.encode!(result, pretty: true)}
+        error -> error
+      end
+    end
+  end
+
+  def call_tool("mosaic_memory_stats", args) do
+    session_id = Map.get(args, "session_id", "")
+
+    if session_id == "" do
+      {:error, "session_id is required"}
+    else
+      case Mosaic.Memory.AgentMemory.stats(session_id) do
+        {:ok, stats} ->
+          {:ok, Jason.encode!(stats, pretty: true)}
+        error -> error
+      end
     end
   end
 

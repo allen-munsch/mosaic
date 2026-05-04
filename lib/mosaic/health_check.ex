@@ -8,7 +8,7 @@ defmodule Mosaic.HealthCheck do
 
   def init(_opts) do
     schedule_health_check()
-    {:ok, %{last_check: nil, status: :healthy}}
+    {:ok, %{last_check: nil, status: :healthy, metrics: %{}}}
   end
 
   def handle_info(:check_health, state) do
@@ -22,6 +22,28 @@ defmodule Mosaic.HealthCheck do
 
   defp schedule_health_check do
     Process.send_after(self(), :check_health, 10_000)  # Every 10 seconds
+  end
+
+  @doc "Get a named metric counter."
+  def get_metric(name) do
+    GenServer.call(__MODULE__, {:get_metric, name})
+  end
+
+  @doc "Set a named metric counter."
+  def put_metric(name, value) do
+    GenServer.cast(__MODULE__, {:put_metric, name, value})
+  end
+
+  @impl true
+  def handle_call({:get_metric, name}, _from, state) do
+    value = Map.get(state, :metrics) |> Map.get(name, 0)
+    {:reply, value, state}
+  end
+
+  @impl true
+  def handle_cast({:put_metric, name, value}, state) do
+    metrics = Map.get(state, :metrics, %{})
+    {:noreply, %{state | metrics: Map.put(metrics, name, value)}}
   end
 
   defp perform_health_check do

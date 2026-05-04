@@ -19,7 +19,7 @@ defmodule Mosaic.Reify.Cache do
   alias Mosaic.Graph.Writer
 
   @doc "Store a reified component in the graph."
-  def store(name, sexpr, code, framework, opts \\ []) do
+  def store(name, sexpr, code, framework, _opts \\ []) do
     shard = get_reify_shard()
 
     source_node = %{

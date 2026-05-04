@@ -176,7 +176,42 @@ defmodule Mosaic.RAG.Pipeline do
     end)
   end
 
-  defp fetch_neighbors(_chunk, _window), do: []  # TODO: implement neighbor fetch
+  defp fetch_neighbors(chunk, window) do
+    # Fetch chunks before and after in the same document by position
+    doc_id = chunk[:doc_id] || chunk[:id]
+
+    if doc_id do
+      # Query for neighboring chunks in the same document
+      sql = """
+        SELECT id, name, type, file_path, start_line, source_text
+        FROM nodes
+        WHERE type = 'chunk'
+          AND (id LIKE ? OR file_path = ?)
+          AND id != ?
+        ORDER BY start_line ASC
+        LIMIT ?
+      """
+
+      prefix = String.slice(doc_id, 0, max(0, String.length(doc_id) - 2))
+
+      case Mosaic.FederatedQuery.execute(sql, ["%#{prefix}%", chunk.file_path, chunk.id, window * 2]) do
+        rows when is_list(rows) ->
+          Enum.map(rows, fn row ->
+            case row do
+              [id, name, type, file, line, text | _] ->
+                %{id: id, name: name, type: type, file_path: file, start_line: line,
+                  source_text: String.slice(text || "", 0, 200)}
+              _ -> nil
+            end
+          end)
+          |> Enum.reject(&is_nil/1)
+
+        _ -> []
+      end
+    else
+      []
+    end
+  end
 
   # ── Utilities ──────────────────────────────────────────────────
 

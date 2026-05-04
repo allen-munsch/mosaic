@@ -79,6 +79,13 @@ defmodule Mosaic.Config do
     # ── MCP server ──────────────────────────────────────
     mcp_enabled: false,
     mcp_transport: "stdio",
+    # ── Agent Fabric (MosaicDB + Zypi integration) ────────
+    fabric_enabled: false,
+    fabric_sandbox_url: "http://localhost:4000",
+    fabric_default_image: "ubuntu:24.04",
+    fabric_default_timeout: 30,
+    fabric_default_memory_mb: 256,
+    fabric_default_vcpus: 1,
     # ── AST ingestion ───────────────────────────────────
     ast_tree_sitter_backend: "ast-grep",
     ast_supported_languages: ["elixir", "python", "rust", "go", "javascript", "typescript"],
@@ -92,7 +99,25 @@ defmodule Mosaic.Config do
       go: "tree-sitter-go",
       javascript: "tree-sitter-javascript",
       typescript: "tree-sitter-typescript"
-    }
+    },
+    # ── Authentication ──────────────────────────────────
+    auth_enabled: false,
+    jwt_secret: "mosaic-dev-secret-change-in-production",
+    jwt_issuer: "mosaicdb",
+    jwt_audience: "mosaicdb-api",
+    jwt_ttl: 86400,
+    auth_db_path: "/tmp/mosaic/auth.db",
+    # ── Multi-tenancy ───────────────────────────────────
+    tenancy_enabled: false,
+    # ── Consensus (:ra Raft cluster) ────────────────────
+    consensus_enabled: false,
+    cluster_peers: [],
+    # ── Embedding model configuration ───────────────────
+    embedding_model_name: "all-MiniLM-L6-v2",
+    embedding_provider: "local",
+    # ── API ─────────────────────────────────────────────
+    api_rate_limit_per_minute: 1000,
+    api_max_body_size: 10_000_000
   }
 
   def get(key, default \\ nil) do

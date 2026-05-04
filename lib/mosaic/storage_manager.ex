@@ -169,6 +169,40 @@ defp create_handles_schema(conn) do
   """)
 
   Exqlite.Sqlite3.execute(conn, "CREATE INDEX IF NOT EXISTS idx_handles_created ON handles(created_at);")
+
+  # FTS5 virtual table for full-text search on handle names and previews
+  Exqlite.Sqlite3.execute(conn, """
+    CREATE VIRTUAL TABLE IF NOT EXISTS handles_fts USING fts5(
+      handle_name,
+      preview,
+      content='handles',
+      content_rowid='rowid'
+    );
+  """)
+
+  # Triggers to keep FTS5 index in sync
+  Exqlite.Sqlite3.execute(conn, """
+    CREATE TRIGGER IF NOT EXISTS handles_ai AFTER INSERT ON handles BEGIN
+      INSERT INTO handles_fts(rowid, handle_name, preview)
+      VALUES (new.rowid, new.handle_name, new.preview);
+    END;
+  """)
+
+  Exqlite.Sqlite3.execute(conn, """
+    CREATE TRIGGER IF NOT EXISTS handles_ad AFTER DELETE ON handles BEGIN
+      INSERT INTO handles_fts(handles_fts, rowid, handle_name, preview)
+      VALUES ('delete', old.rowid, old.handle_name, old.preview);
+    END;
+  """)
+
+  Exqlite.Sqlite3.execute(conn, """
+    CREATE TRIGGER IF NOT EXISTS handles_au AFTER UPDATE ON handles BEGIN
+      INSERT INTO handles_fts(handles_fts, rowid, handle_name, preview)
+      VALUES ('delete', old.rowid, old.handle_name, old.preview);
+      INSERT INTO handles_fts(rowid, handle_name, preview)
+      VALUES (new.rowid, new.handle_name, new.preview);
+    END;
+  """)
 end
 
 defp ensure_vector_table(conn) do
