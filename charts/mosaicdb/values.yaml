@@ -1,0 +1,124 @@
+# ── MosaicDB Helm Chart Values ──────────────────────────────────
+# helm install mosaicdb ./charts/mosaicdb --set persistence.enabled=true
+
+replicaCount: 1
+
+image:
+  repository: mosaicdb
+  tag: latest
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podSecurityContext: {}
+
+# ── Service ─────────────────────────────────────────────────────
+service:
+  type: ClusterIP
+  port: 4040
+
+# ── Ingress ──────────────────────────────────────────────────────
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: mosaicdb.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# ── Persistence ─────────────────────────────────────────────────
+persistence:
+  enabled: true
+  accessMode: ReadWriteOnce
+  size: 50Gi
+  storageClass: ""
+
+# ── Resources ───────────────────────────────────────────────────
+resources:
+  requests:
+    memory: 2Gi
+    cpu: 1000m
+  limits:
+    memory: 8Gi
+    cpu: 4000m
+
+# ── Autoscaling ────────────────────────────────────────────────
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# ── Pod Disruption Budget ───────────────────────────────────────
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# ── Network Policy ──────────────────────────────────────────────
+networkPolicy:
+  enabled: false
+
+# ── Authentication ──────────────────────────────────────────────
+auth:
+  enabled: false
+  jwtSecret: ""        # auto-generated if empty
+  apiKeyEncryptionKey: ""  # auto-generated if empty
+
+# ── MCP Server ─────────────────────────────────────────────────
+mcp:
+  enabled: false
+
+# ── MosaicDB Configuration ──────────────────────────────────────
+config:
+  storagePath: /var/lib/mosaic/shards
+  routingDbPath: /var/lib/mosaic/config/index.db
+  embeddingModel: local
+  embeddingDim: 384
+  embeddingProvider: bumblebee
+  indexStrategy: hnsw
+  cacheBackend: ets
+  defaultResultLimit: 20
+  minSimilarity: 0.1
+  queryTimeout: 10000
+  graphEnabled: true
+  handleRegistryEnabled: true
+
+# ── Redis (optional, distributed cache) ─────────────────────────
+redis:
+  enabled: false
+  url: "redis://redis:6379/1"
+
+# ── Cluster (Erlang distribution) ────────────────────────────────
+cluster:
+  enabled: false
+  secret: mosaic-cluster-secret
+  gossipPort: 45892
+
+# ── Monitoring ──────────────────────────────────────────────────
+monitoring:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    path: /metrics
+    labels: {}
+
+# ── Node Selection ──────────────────────────────────────────────
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# ── Extra ───────────────────────────────────────────────────────
+extraVolumes: []
+extraVolumeMounts: []
+extraEnv: []
