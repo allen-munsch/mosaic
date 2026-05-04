@@ -5,7 +5,7 @@ defmodule Mosaic.MixProject do
     [
       app: :mosaic,
       version: "0.2.0",
-      elixir: "~> 1.20.0-rc.0",
+      elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       releases: releases(),

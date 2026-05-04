@@ -79,6 +79,13 @@ defmodule Mosaic.Config do
     # ── MCP server ──────────────────────────────────────
     mcp_enabled: false,
     mcp_transport: "stdio",
+    # ── Agent Fabric (MosaicDB + Zypi integration) ────────
+    fabric_enabled: false,
+    fabric_sandbox_url: "http://localhost:4000",
+    fabric_default_image: "ubuntu:24.04",
+    fabric_default_timeout: 30,
+    fabric_default_memory_mb: 256,
+    fabric_default_vcpus: 1,
     # ── AST ingestion ───────────────────────────────────
     ast_tree_sitter_backend: "ast-grep",
     ast_supported_languages: ["elixir", "python", "rust", "go", "javascript", "typescript"],
