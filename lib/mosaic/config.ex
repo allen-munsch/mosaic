@@ -75,6 +75,7 @@ defmodule Mosaic.Config do
     handle_max_count: 10_000,
     handle_default_ttl_seconds: 3600,
     handle_preview_length: 120,
+    handle_db_path: "/tmp/mosaic/handles/handles.db",
     # ── MCP server ──────────────────────────────────────
     mcp_enabled: false,
     mcp_transport: "stdio",

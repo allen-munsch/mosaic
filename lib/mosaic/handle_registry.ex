@@ -214,19 +214,20 @@ defmodule Mosaic.HandleRegistry do
   end
 
   defp get_connection do
-    # Use the routing DB (always available, same life as the app)
-    routing_db = Mosaic.Config.get(:routing_db_path)
-    ensure_handles_table(routing_db)
-    Mosaic.ConnectionPool.checkout(routing_db)
+    db_path = Mosaic.Config.get(:handle_db_path, Mosaic.Config.get(:routing_db_path))
+    ensure_handles_table(db_path)
+    Mosaic.ConnectionPool.checkout(db_path)
   end
 
-  defp ensure_handles_table(routing_db) do
-    # Lazy-init: create handles table in routing DB if missing
-    unless File.exists?(routing_db) do
-      File.mkdir_p!(Path.dirname(routing_db))
+  defp ensure_handles_table(db_path) do
+    File.mkdir_p!(Path.dirname(db_path))
+
+    # Touch the file so SQLite can open it
+    unless File.exists?(db_path) do
+      File.write!(db_path, "")
     end
 
-    case Mosaic.ConnectionPool.checkout(routing_db) do
+    case Mosaic.ConnectionPool.checkout(db_path) do
       {:ok, conn} ->
         Mosaic.DB.execute(conn, """
           CREATE TABLE IF NOT EXISTS handles (
@@ -239,16 +240,15 @@ defmodule Mosaic.HandleRegistry do
             ttl_seconds INTEGER DEFAULT 3600
           )
         """)
-
         Mosaic.DB.execute(conn, "CREATE INDEX IF NOT EXISTS idx_handles_created ON handles(created_at)")
-        Mosaic.ConnectionPool.checkin(routing_db, conn)
+        Mosaic.ConnectionPool.checkin(db_path, conn)
         :ok
       _ -> :ok
     end
   end
 
   defp release_connection(conn) do
-    routing_db = Mosaic.Config.get(:routing_db_path)
-    Mosaic.ConnectionPool.checkin(routing_db, conn)
+    db_path = Mosaic.Config.get(:handle_db_path, Mosaic.Config.get(:routing_db_path))
+    Mosaic.ConnectionPool.checkin(db_path, conn)
   end
 end

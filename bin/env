@@ -1,0 +1,4 @@
+#!/bin/bash
+export PATH="/home/jm/.asdf/installs/elixir/1.20.0-rc.0-otp-28/bin:/home/jm/.asdf/installs/erlang/28.2/bin:$PATH"
+cd /home/jm/projects/exs/mosaic
+exec "$@"
