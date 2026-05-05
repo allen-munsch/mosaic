@@ -167,6 +167,42 @@ defmodule Mosaic.HandleRegistry do
     end
   end
 
+  @doc """
+  Full-text search across handle names and previews using FTS5.
+  Returns matching handles with their previews.
+  """
+  def search(query, opts \\ []) when is_binary(query) do
+    limit = Keyword.get(opts, :limit, 20)
+
+    with {:ok, conn} <- get_connection() do
+      # Try FTS5 search first
+      result = case Mosaic.DB.query(conn,
+        "SELECT h.handle_name, h.result_type, h.item_count, h.preview, h.created_at " <>
+        "FROM handles_fts f JOIN handles h ON h.rowid = f.rowid " <>
+        "WHERE handles_fts MATCH ? ORDER BY rank LIMIT ?",
+        [query, limit]) do
+
+        {:ok, [_ | _] = rows} -> {:ok, rows}
+        _ ->
+          # Fallback to LIKE search if FTS5 is unavailable
+          Mosaic.DB.query(conn,
+            "SELECT handle_name, result_type, item_count, preview, created_at " <>
+            "FROM handles WHERE handle_name LIKE ? OR preview LIKE ? ORDER BY created_at DESC LIMIT ?",
+            ["%#{query}%", "%#{query}%", limit])
+      end
+
+      release_connection(conn)
+
+      case result do
+        {:ok, rows} ->
+          {:ok, Enum.map(rows, fn [name, type, count, preview, created] ->
+            %{handle: name, type: type, count: count, preview: preview, created: created}
+          end)}
+        err -> err
+      end
+    end
+  end
+
   # -- Private ---------------------------------------------------
 
   defp detect_type(results) when is_list(results), do: "array"

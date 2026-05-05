@@ -399,6 +399,21 @@ defmodule Mosaic.API do
     end
   end
 
+  # ── Memo Search ────────────────────────────────────────
+
+  post "/api/memo/search" do
+    with {:ok, query} <- require_param(conn.body_params, "query") do
+      limit = conn.body_params["limit"] || 20
+
+      case Mosaic.HandleRegistry.search(query, limit: limit) do
+        {:ok, results} -> json_ok(conn, %{results: results, count: length(results)})
+        {:error, reason} -> json_error(conn, 500, inspect(reason))
+      end
+    else
+      {:error, msg} -> json_error(conn, 400, msg)
+    end
+  end
+
   # ── HOT PATH: Semantic search ────────────────────────────
   post "/api/search" do
     with {:ok, query} <- require_param(conn.body_params, "query") do

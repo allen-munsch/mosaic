@@ -15,6 +15,10 @@ WORKDIR /app
 COPY mix.exs mix.lock ./
 RUN mix deps.get --only prod
 
+# Copy sqlite-vec extension to priv/ for release bundling
+RUN mkdir -p priv/sqlite_vec && \
+    cp deps/sqlite_vec/priv/0.1.5/vec0.so priv/sqlite_vec/vec0.so 2>/dev/null || true
+
 COPY config config/
 COPY lib lib/
 COPY priv priv/

@@ -246,7 +246,18 @@ end
 
 defp sqlite_vec_path do
   System.get_env("SQLITE_VEC_PATH") ||
-    "deps/sqlite_vec/priv/0.1.5/vec0.so"
+    find_vec_extension([
+      "priv/sqlite_vec/vec0.so",
+      "_build/prod/lib/sqlite_vec/priv/0.1.5/vec0.so",
+      "deps/sqlite_vec/priv/0.1.5/vec0.so"
+    ])
+end
+
+defp find_vec_extension(paths) do
+  Enum.find_value(paths, fn path ->
+    abs = Path.expand(path, File.cwd!())
+    if File.exists?(abs), do: abs
+  end)
 end
 
 def load_vec_extension(conn) do

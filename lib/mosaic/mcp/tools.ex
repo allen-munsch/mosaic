@@ -205,6 +205,13 @@ defmodule Mosaic.MCP.Tools do
           name: %{type: "string", description: "Prompt name"},
           version_a: %{type: "integer", description: "First version to compare"},
           version_b: %{type: "integer", description: "Second version to compare"}
+        }),
+
+      tool("mosaic_memo_search", "Full-text search across stored memos and handles. Memos are stored in the handle registry (separate from the vector index). Use this when mosaic_search returns nothing for memo data.",
+        required: ["query"],
+        properties: %{
+          query: %{type: "string", description: "Search query for memo names and previews"},
+          limit: %{type: "integer", description: "Max results (default: 20)"}
         })
     ]
   end
@@ -324,6 +331,23 @@ defmodule Mosaic.MCP.Tools do
     handle = Map.get(args, "handle", "")
     HandleRegistry.delete(handle)
     {:ok, "Memo deleted: #{handle}"}
+  end
+
+  def call_tool("mosaic_memo_search", args) do
+    query = Map.get(args, "query", "")
+    limit = Map.get(args, "limit", 20)
+
+    if query == "" do
+      {:error, "query is required"}
+    else
+      case HandleRegistry.search(query, limit: limit) do
+        {:ok, results} ->
+          {:ok, Jason.encode!(%{count: length(results), results: results}, pretty: true)}
+
+        {:error, reason} ->
+          {:error, inspect(reason)}
+      end
+    end
   end
 
   def call_tool("mosaic_status", args) do
