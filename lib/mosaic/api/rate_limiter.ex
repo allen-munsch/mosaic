@@ -124,10 +124,25 @@ defmodule Mosaic.API.RateLimiter do
   # ── Private ────────────────────────────────────────────────
 
   defp ensure_table do
-    unless Process.whereis(:rate_limiter_cleanup) do
-      :ets.new(@table_name, [:named_table, :public, :set])
-      start_cleanup_timer()
+    # Idempotent table creation — safe for concurrent calls.
+    # Using :ets.info (not Process.whereis) to check the actual ETS table,
+    # not a process that may have died without cleaning up the table.
+    case :ets.info(@table_name) do
+      :undefined ->
+        try do
+          :ets.new(@table_name, [:named_table, :public, :set])
+        rescue
+          ArgumentError -> :ok  # already created by concurrent caller
+        end
+        start_cleanup_timer()
+
+      _ ->
+        # Table already exists — ensure cleanup timer is running
+        unless Process.whereis(:rate_limiter_cleanup) do
+          start_cleanup_timer()
+        end
     end
+    :ok
   end
 
   defp start_cleanup_timer do
