@@ -183,6 +183,87 @@ defmodule Mosaic.API do
     end
   end
 
+  # ── Prompt Registry ────────────────────────────────────
+
+  post "/api/prompts" do
+    with {:ok, name} <- require_param(conn.body_params, "name"),
+         {:ok, template} <- require_param(conn.body_params, "template") do
+      model = conn.body_params["model"]
+      tags = conn.body_params["tags"] || []
+
+      case Mosaic.Prompts.Registry.store(name, template,
+             model: model, tags: tags) do
+        {:ok, prompt} -> json_ok(conn, 201, prompt)
+        error -> json_error(conn, 500, inspect(error))
+      end
+    else
+      {:error, msg} -> json_error(conn, 400, msg)
+    end
+  end
+
+  post "/api/prompts/render" do
+    with {:ok, name} <- require_param(conn.body_params, "name") do
+      vars = conn.body_params["variables"] || %{}
+      version = conn.body_params["version"]
+
+      case Mosaic.Prompts.Registry.render(name, vars, version: version) do
+        {:ok, result} -> json_ok(conn, result)
+        {:error, :not_found} -> json_error(conn, 404, "Prompt not found: #{name}")
+        error -> json_error(conn, 500, inspect(error))
+      end
+    else
+      {:error, msg} -> json_error(conn, 400, msg)
+    end
+  end
+
+  get "/api/prompts" do
+    case Mosaic.Prompts.Registry.list() do
+      {:ok, prompts} -> json_ok(conn, %{prompts: prompts, count: length(prompts)})
+      _ -> json_error(conn, 500, "Failed to list prompts")
+    end
+  end
+
+  get "/api/prompts/:name" do
+    case Mosaic.Prompts.Registry.get_prompt(name) do
+      {:ok, prompt} -> json_ok(conn, prompt)
+      {:error, :not_found} -> json_error(conn, 404, "Prompt not found: #{name}")
+      _ -> json_error(conn, 500, "Failed to get prompt")
+    end
+  end
+
+  get "/api/prompts/:name/versions" do
+    case Mosaic.Prompts.Registry.versions(name) do
+      {:ok, versions} -> json_ok(conn, %{versions: versions, count: length(versions)})
+      {:error, :not_found} -> json_error(conn, 404, "Prompt not found: #{name}")
+      _ -> json_error(conn, 500, "Failed to list versions")
+    end
+  end
+
+  post "/api/prompts/:name/rollback" do
+    with {:ok, version} <- require_param(conn.body_params, "version") do
+      case Mosaic.Prompts.Registry.rollback(name, version) do
+        {:ok, result} -> json_ok(conn, result)
+        {:error, :not_found} -> json_error(conn, 404, "Version not found")
+        error -> json_error(conn, 500, inspect(error))
+      end
+    else
+      {:error, msg} -> json_error(conn, 400, msg)
+    end
+  end
+
+  post "/api/prompts/:name/compare" do
+    with {:ok, version_a} <- require_param(conn.body_params, "version_a"),
+         {:ok, version_b} <- require_param(conn.body_params, "version_b") do
+      case Mosaic.Prompts.Registry.compare(name, version_a, version_b) do
+        {:ok, diff} -> json_ok(conn, diff)
+        {:error, :not_found} -> json_error(conn, 404, "Version not found")
+        error -> json_error(conn, 500, inspect(error))
+      end
+    else
+      {:error, msg} -> json_error(conn, 400, msg)
+    end
+  end
+
   # ── HOT PATH: Semantic search ────────────────────────────
   post "/api/search" do
     with {:ok, query} <- require_param(conn.body_params, "query") do

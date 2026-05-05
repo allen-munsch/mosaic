@@ -165,6 +165,46 @@ defmodule Mosaic.MCP.Tools do
           include_executions: %{type: "boolean", description: "Include execution history (default: true)"},
           include_graph: %{type: "boolean", description: "Include graph topology stats (default: true)"},
           memory_limit: %{type: "integer", description: "Max memories to return per agent (default: 10)"}
+        }),
+
+      # ── Prompt Registry ────────────────────────────────────
+
+      tool("mosaic_prompt_store", "Store a versioned prompt template for an LLM. Auto-increments versions. Supports {{variable}} interpolation.",
+        required: ["name", "template"],
+        properties: %{
+          name: %{type: "string", description: "Prompt name (e.g., 'rag_system', 'code_review')"},
+          template: %{type: "string", description: "Prompt template with {{variable}} placeholders"},
+          model: %{type: "string", description: "Target LLM model (e.g., 'claude-3-opus')"},
+          tags: %{type: "array", items: %{type: "string"}, description: "Tags for categorization"}
+        }),
+
+      tool("mosaic_prompt_render", "Render a stored prompt template with variable substitution.",
+        required: ["name", "variables"],
+        properties: %{
+          name: %{type: "string", description: "Prompt name"},
+          variables: %{type: "object", description: "Map of variable names to values"},
+          version: %{type: "integer", description: "Specific version (default: active)"}
+        }),
+
+      tool("mosaic_prompt_list", "List all stored prompts with their active versions and templates.",
+        required: [],
+        properties: %{
+          tag: %{type: "string", description: "Filter by tag"},
+          search: %{type: "string", description: "Search by name or template content"}
+        }),
+
+      tool("mosaic_prompt_versions", "List all versions of a specific prompt.",
+        required: ["name"],
+        properties: %{
+          name: %{type: "string", description: "Prompt name"}
+        }),
+
+      tool("mosaic_prompt_compare", "Compare two versions of a prompt and show the diff.",
+        required: ["name", "version_a", "version_b"],
+        properties: %{
+          name: %{type: "string", description: "Prompt name"},
+          version_a: %{type: "integer", description: "First version to compare"},
+          version_b: %{type: "integer", description: "Second version to compare"}
         })
     ]
   end
