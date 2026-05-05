@@ -100,17 +100,19 @@ defmodule Mosaic.HandleRegistry do
   def memo(label, content) do
     handle_name = "$memo_#{sanitize(label)}"
     ttl = 86_400  # 24h default
+    content_binary = if is_binary(content), do: content, else: :erlang.term_to_binary(content, compressed: 6)
+    content_size = if is_binary(content), do: byte_size(content), else: :erlang.external_size(content)
 
     with {:ok, conn} <- get_connection() do
       Mosaic.DB.execute(conn, """
         INSERT OR REPLACE INTO handles (handle_name, result_type, item_count, preview, full_data, ttl_seconds)
         VALUES (?, 'memo', 1, ?, ?, ?)
-      """, [handle_name, String.slice(label, 0, 100), content, ttl])
+      """, [handle_name, String.slice(label, 0, 100), content_binary, ttl])
 
       release_connection(conn)
     end
 
-    "#{handle_name}: \"#{label}\" (#{byte_size(content)}B)"
+    "#{handle_name}: \"#{label}\" (#{content_size}B)"
   end
 
   @doc """
