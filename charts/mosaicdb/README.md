@@ -1,26 +1,26 @@
 # MosaicDB Helm Chart
 
-Federated SQL Semantic Search & Analytics Engine with DuckDB, SQLite shards, property graph, RAG pipeline, and MCP server.
+Federated SQL Semantic Search & Analytics Engine with DuckDB, SQLite shards, Property Graph, and MCP server.
 
-## Quick Install
+## Quick Start
 
 ```bash
 helm repo add mosaicdb https://allen-munsch.github.io/mosaic
 helm install mosaicdb mosaicdb/mosaicdb \
   --set persistence.enabled=true \
-  --set persistence.size=100Gi
+  --set persistence.size=50Gi
 ```
 
 ## Parameters
 
-### Core Configuration
+### Core
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `replicaCount` | Number of replicas | `1` |
 | `image.repository` | Container image | `mosaicdb` |
 | `image.tag` | Image tag | `latest` |
-| `image.pullPolicy` | Pull policy | `IfNotPresent` |
+| `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 
 ### Service & Ingress
 
@@ -30,7 +30,8 @@ helm install mosaicdb mosaicdb/mosaicdb \
 | `service.port` | HTTP port | `4040` |
 | `ingress.enabled` | Enable ingress | `false` |
 | `ingress.className` | Ingress class | `nginx` |
-| `ingress.hosts` | Host rules | `mosaicdb.local` |
+| `ingress.hosts` | Host rules | `[{host: mosaicdb.local}]` |
+| `ingress.tls` | TLS config | `[]` |
 
 ### Persistence
 
@@ -52,84 +53,89 @@ helm install mosaicdb mosaicdb/mosaicdb \
 | `autoscaling.enabled` | Enable HPA | `false` |
 | `autoscaling.minReplicas` | Min replicas | `1` |
 | `autoscaling.maxReplicas` | Max replicas | `10` |
+| `autoscaling.targetCPUUtilizationPercentage` | CPU target | `70` |
+| `autoscaling.targetMemoryUtilizationPercentage` | Memory target | `80` |
+| `podDisruptionBudget.enabled` | Enable PDB | `false` |
+| `podDisruptionBudget.minAvailable` | Min available pods | `1` |
 
-### Authentication
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `auth.enabled` | Enable auth (JWT + API keys) | `false` |
-| `auth.jwtSecret` | JWT signing secret | auto-generated |
-| `auth.apiKeyEncryptionKey` | API key encryption key | auto-generated |
-
-### MosaicDB Config
+### MosaicDB Configuration
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `config.storagePath` | Shard storage path | `/var/lib/mosaic/shards` |
 | `config.routingDbPath` | Routing DB path | `/var/lib/mosaic/config/index.db` |
-| `config.embeddingModel` | Embedding model | `local` |
-| `config.embeddingDim` | Embedding dimensions | `384` |
-| `config.embeddingProvider` | Provider | `bumblebee` |
+| `config.embeddingDim` | Embedding dimension | `384` |
+| `config.embeddingProvider` | Provider (bumblebee/openai) | `bumblebee` |
 | `config.indexStrategy` | Index strategy | `hnsw` |
-| `config.cacheBackend` | Cache backend | `ets` |
-| `config.minSimilarity` | Min cosine similarity | `0.1` |
+| `config.cacheBackend` | Cache backend (ets/redis) | `ets` |
+| `config.minSimilarity` | Min similarity threshold | `0.1` |
 | `config.queryTimeout` | Query timeout (ms) | `10000` |
 | `config.graphEnabled` | Enable graph DB | `true` |
 | `config.handleRegistryEnabled` | Enable handle registry | `true` |
 
-### Features
+### Authentication
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `mcp.enabled` | Enable MCP server | `false` |
-| `redis.enabled` | Enable Redis cache | `false` |
+| `auth.enabled` | Enable auth (JWT + API key) | `false` |
+| `auth.jwtSecret` | JWT signing secret | `""` (auto-generated in dev) |
+| `auth.jwtIssuer` | JWT issuer | `mosaicdb` |
+| `auth.jwtTTL` | JWT TTL in seconds | `86400` |
+
+### Redis (Distributed Cache)
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `redis.enabled` | Enable Redis | `false` |
 | `redis.url` | Redis URL | `redis://redis:6379/1` |
-| `cluster.enabled` | Enable Erlang clustering | `false` |
-| `cluster.gossipPort` | Gossip protocol port | `45892` |
 
-### Security & Monitoring
+### Cluster (Erlang Distribution)
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `networkPolicy.enabled` | Enable NetworkPolicy | `false` |
-| `podDisruptionBudget.enabled` | Enable PDB | `false` |
-| `podDisruptionBudget.minAvailable` | Min available pods | `1` |
-| `monitoring.serviceMonitor.enabled` | Enable ServiceMonitor | `false` |
-| `monitoring.serviceMonitor.interval` | Scrape interval | `30s` |
+| `cluster.enabled` | Enable clustering | `false` |
+| `cluster.secret` | Cluster secret | `mosaic-cluster-secret` |
+| `cluster.gossipPort` | Gossip port | `45892` |
 
-## Production Example
+### Monitoring
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `monitoring.serviceMonitor.enabled` | Enable Prometheus ServiceMonitor | `false` |
+| `monitoring.serviceMonitor.interval` | Scrape interval | `30s` |
+| `monitoring.serviceMonitor.path` | Metrics path | `/metrics` |
+
+### Security
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `networkPolicy.enabled` | Enable network policy | `false` |
+| `serviceAccount.create` | Create service account | `true` |
+| `serviceAccount.name` | Service account name | `""` (auto) |
+
+## Production Deployment
 
 ```bash
 helm install mosaicdb ./charts/mosaicdb \
+  --namespace mosaicdb --create-namespace \
   --set replicaCount=3 \
   --set persistence.enabled=true \
   --set persistence.size=200Gi \
   --set ingress.enabled=true \
-  --set 'ingress.hosts[0].host=mosaicdb.example.com' \
+  --set ingress.hosts[0].host=mosaicdb.example.com \
   --set autoscaling.enabled=true \
-  --set autoscaling.minReplicas=3 \
-  --set autoscaling.maxReplicas=10 \
-  --set auth.enabled=true \
-  --set mcp.enabled=true \
   --set redis.enabled=true \
+  --set auth.enabled=true \
+  --set auth.jwtSecret="$(openssl rand -base64 32)" \
   --set monitoring.serviceMonitor.enabled=true \
   --set networkPolicy.enabled=true \
   --set podDisruptionBudget.enabled=true
 ```
 
-## GitOps
-
-### ArgoCD
+## GitOps with ArgoCD
 
 ```bash
 kubectl apply -f argocd/mosaicdb.yaml
-# Multi-environment: kubectl apply -f argocd/appset.yaml
-```
-
-### Flux
-
-```bash
-flux create source git mosaicdb --url=https://github.com/allen-munsch/mosaic --branch=main
-flux create helmrelease mosaicdb --source=GitRepository/mosaicdb \
-  --chart=./charts/mosaicdb --target-namespace=mosaicdb
+# or multi-environment (dev/staging/prod):
+kubectl apply -f argocd/appset.yaml
 ```

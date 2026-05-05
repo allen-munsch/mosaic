@@ -35,6 +35,9 @@ defmodule Mosaic.Application do
       {Mosaic.EmbeddingService, []},
       {Mosaic.EmbeddingCache, []},
 
+      # Semantic result cache (intent-based, 10-100x query savings)
+      # (standalone module, uses ETS + SQLite — no supervision needed)
+
       # HOT PATH: Query engine (SQLite + sqlite-vec)
       {Mosaic.QueryEngine, [
         cache: cache_module(),
@@ -57,6 +60,8 @@ defmodule Mosaic.Application do
       # Monitoring
       {Mosaic.Telemetry, []},
       {Mosaic.HealthCheck, []},
+
+      # Evaluation harness (standalone module — uses SQLite, no supervision)
 
       # API
       {Plug.Cowboy, scheme: :http, plug: Mosaic.API, options: [port: port()]}
