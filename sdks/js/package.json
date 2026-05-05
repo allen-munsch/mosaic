@@ -1,0 +1,34 @@
+{
+  "name": "mosaicdb",
+  "version": "0.2.0",
+  "description": "JavaScript/TypeScript client for MosaicDB — Federated Semantic Search & Code Graph",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "vector-search", "semantic-search", "graph-database", "rag", "mcp",
+    "duckdb", "sqlite", "embeddings", "ai-agents"
+  ],
+  "author": "MosaicDB Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/allen-munsch/mosaic.git",
+    "directory": "sdks/js"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0",
+    "@types/node": "^20.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
