@@ -264,6 +264,141 @@ defmodule Mosaic.API do
     end
   end
 
+  # ── Agent Pipelines ────────────────────────────────────
+
+  post "/api/pipelines" do
+    with {:ok, name} <- require_param(conn.body_params, "name"),
+         {:ok, steps} <- require_param(conn.body_params, "steps") do
+      parsed_steps = Enum.map(steps, fn [type, config] ->
+        {String.to_atom(type), Enum.map(config || [], fn {k, v} -> {String.to_atom(k), v} end)}
+      end)
+
+      case Mosaic.Pipelines.AgentPipeline.define(String.to_atom(name), parsed_steps) do
+        {:ok, pipeline} -> json_ok(conn, 201, pipeline)
+        error -> json_error(conn, 500, inspect(error))
+      end
+    else
+      {:error, msg} -> json_error(conn, 400, msg)
+    end
+  end
+
+  post "/api/pipelines/run" do
+    with {:ok, name} <- require_param(conn.body_params, "name") do
+      params = conn.body_params["params"] || %{}
+
+      case Mosaic.Pipelines.AgentPipeline.run(String.to_atom(name), params) do
+        {:ok, results, handle, stats} ->
+          json_ok(conn, %{results: results, handle: handle, stats: stats})
+        {:error, :not_found} -> json_error(conn, 404, "Pipeline not found")
+        error -> json_error(conn, 500, inspect(error))
+      end
+    else
+      {:error, msg} -> json_error(conn, 400, msg)
+    end
+  end
+
+  get "/api/pipelines" do
+    case Mosaic.Pipelines.AgentPipeline.list() do
+      {:ok, pipelines} -> json_ok(conn, %{pipelines: pipelines, count: length(pipelines)})
+      _ -> json_error(conn, 500, "Failed to list pipelines")
+    end
+  end
+
+  get "/api/pipelines/:name/history" do
+    case Mosaic.Pipelines.AgentPipeline.history(String.to_atom(name), limit: 20) do
+      {:ok, history} -> json_ok(conn, %{history: history})
+      _ -> json_error(conn, 500, "Failed to get history")
+    end
+  end
+
+  # ── Webhook Triggers ────────────────────────────────────
+
+  post "/api/triggers" do
+    with {:ok, name} <- require_param(conn.body_params, "name"),
+         {:ok, query} <- require_param(conn.body_params, "query"),
+         {:ok, webhook_url} <- require_param(conn.body_params, "webhook_url") do
+      opts = [name: name, query: query, webhook_url: webhook_url]
+      opts = if conn.body_params["similarity_threshold"], do: Keyword.put(opts, :similarity_threshold, conn.body_params["similarity_threshold"]), else: opts
+
+      case Mosaic.Triggers.WebhookTrigger.create(opts) do
+        {:ok, trigger} -> json_ok(conn, 201, trigger)
+        error -> json_error(conn, 500, inspect(error))
+      end
+    else
+      {:error, msg} -> json_error(conn, 400, msg)
+    end
+  end
+
+  get "/api/triggers" do
+    case Mosaic.Triggers.WebhookTrigger.list() do
+      {:ok, triggers} -> json_ok(conn, %{triggers: triggers, count: length(triggers)})
+      _ -> json_error(conn, 500, "Failed to list triggers")
+    end
+  end
+
+  post "/api/triggers/:name/test" do
+    with {:ok, content} <- require_param(conn.body_params, "content") do
+      case Mosaic.Triggers.WebhookTrigger.test(name, content) do
+        {:ok, result} -> json_ok(conn, result)
+        {:error, :not_found} -> json_error(conn, 404, "Trigger not found")
+        error -> json_error(conn, 500, inspect(error))
+      end
+    else
+      {:error, msg} -> json_error(conn, 400, msg)
+    end
+  end
+
+  delete "/api/triggers/:name" do
+    Mosaic.Triggers.WebhookTrigger.delete(name)
+    json_ok(conn, %{status: "deleted", name: name})
+  end
+
+  # ── Multi-Modal Ingestion ────────────────────────────────
+
+  post "/api/ingest/image" do
+    with {:ok, path} <- require_param(conn.body_params, "path") do
+      case Mosaic.Ingest.Multimodal.ingest_image(path) do
+        {:ok, node} -> json_ok(conn, 201, node)
+        {:error, reason} -> json_error(conn, 422, reason)
+      end
+    else
+      {:error, msg} -> json_error(conn, 400, msg)
+    end
+  end
+
+  post "/api/ingest/audio" do
+    with {:ok, path} <- require_param(conn.body_params, "path") do
+      case Mosaic.Ingest.Multimodal.ingest_audio(path) do
+        {:ok, node, stats} -> json_ok(conn, 201, %{node: node, stats: stats})
+        {:error, reason} -> json_error(conn, 422, reason)
+      end
+    else
+      {:error, msg} -> json_error(conn, 400, msg)
+    end
+  end
+
+  post "/api/ingest/youtube" do
+    with {:ok, url} <- require_param(conn.body_params, "url") do
+      case Mosaic.Ingest.Multimodal.ingest_youtube(url) do
+        {:ok, node, stats} -> json_ok(conn, 201, %{node: node, stats: stats})
+        {:error, reason} -> json_error(conn, 422, reason)
+      end
+    else
+      {:error, msg} -> json_error(conn, 400, msg)
+    end
+  end
+
+  post "/api/ingest/media" do
+    with {:ok, path} <- require_param(conn.body_params, "path") do
+      case Mosaic.Ingest.Multimodal.ingest_file(path) do
+        {:ok, result} -> json_ok(conn, 201, result)
+        {:error, reason} -> json_error(conn, 422, reason)
+      end
+    else
+      {:error, msg} -> json_error(conn, 400, msg)
+    end
+  end
+
   # ── HOT PATH: Semantic search ────────────────────────────
   post "/api/search" do
     with {:ok, query} <- require_param(conn.body_params, "query") do
