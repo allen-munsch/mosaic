@@ -638,17 +638,40 @@ defmodule Mosaic.MCP.Tools do
         })
       end
 
-    # Sandbox availability
-    if fabric_enabled?() do
-      case Mosaic.Fabric.Sandbox.pool_stats() do
-        {:ok, stats} ->
-          observation = Map.put(observation, :sandbox_pool, stats)
-        _ ->
-          observation = Map.put(observation, :sandbox_pool, "unavailable")
+    # Sandbox availability — pool stats + live session stats
+    observation =
+      if fabric_enabled?() do
+        obs = observation
+
+        obs =
+          case Mosaic.Fabric.Sandbox.pool_stats() do
+            {:ok, stats} -> Map.put(obs, :sandbox_pool, stats)
+            _ -> Map.put(obs, :sandbox_pool, "unavailable")
+          end
+
+        obs =
+          case Mosaic.Fabric.Sandbox.session_stats() do
+            {:ok, stats} -> Map.put(obs, :live_sessions, stats)
+            _ -> obs
+          end
+
+        # If agent_id given, check if they have live sessions
+        obs =
+          if agent_id do
+            case Mosaic.Fabric.Sandbox.list_sessions() do
+              {:ok, %{"sessions" => sessions}} ->
+                agent_sessions = Enum.filter(sessions, &(&1["agent_id"] == agent_id))
+                Map.put(obs, :agent_live_sessions, length(agent_sessions))
+              _ -> obs
+            end
+          else
+            obs
+          end
+
+        obs
+      else
+        Map.put(observation, :sandbox_pool, "fabric not configured")
       end
-    else
-      observation = Map.put(observation, :sandbox_pool, "fabric not configured")
-    end
 
     {:ok, Jason.encode!(observation, pretty: true)}
   end

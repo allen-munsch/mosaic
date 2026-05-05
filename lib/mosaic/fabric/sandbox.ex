@@ -8,10 +8,14 @@ defmodule Mosaic.Fabric.Sandbox do
 
   Zypi endpoints used:
     POST /exec                    — One-shot command execution
-    POST /containers              — Create a long-lived sandbox
-    POST /containers/:id/start    — Start the microVM
-    POST /containers/:id/stop     — Stop the microVM
-    DELETE /containers/:id        — Destroy the microVM
+    POST /sessions                — Create a long-lived sandbox session
+    POST /sessions/:id/exec       — Execute in an existing session
+    GET  /sessions/:id            — Session details
+    GET  /sessions                — List all sessions
+    DELETE /sessions/:id          — Close and destroy session
+    GET  /sessions/stats          — Session statistics
+    POST /images/:ref/warm        — Pre-warm VMs for an image
+    GET  /images/:ref/warm-status — Warm VM count for image
     GET  /pool/stats              — VM pool statistics
 
   ## Configuration
@@ -34,6 +38,7 @@ defmodule Mosaic.Fabric.Sandbox do
   @doc "Run a one-shot command in a microVM sandbox."
   def run(cmd, opts \\ []) do
     image = Keyword.get(opts, :image, "ubuntu:24.04")
+    agent_id = Keyword.get(opts, :agent_id)
     env = Keyword.get(opts, :env, %{})
     workdir = Keyword.get(opts, :workdir)
     timeout = Keyword.get(opts, :timeout, 30)
@@ -42,6 +47,7 @@ defmodule Mosaic.Fabric.Sandbox do
     body = %{
       cmd: cmd,
       image: image,
+      agent_id: agent_id,
       env: env,
       workdir: workdir,
       timeout: timeout,
@@ -57,6 +63,7 @@ defmodule Mosaic.Fabric.Sandbox do
            stderr: result["stderr"] || "",
            duration_ms: result["duration_ms"],
            container_id: result["container_id"],
+           agent_id: result["agent_id"],
            timed_out: result["timed_out"] || false
          }}
 
@@ -65,63 +72,53 @@ defmodule Mosaic.Fabric.Sandbox do
     end
   end
 
-  @doc "Create a long-lived sandbox session. Returns session info including container_id and IP."
+  @doc "Create a long-lived sandbox session via Zypi's session API."
   def session_create(image \\ "ubuntu:24.04", opts \\ []) do
-    container_id = "fabric_" <> random_id()
-    env = Keyword.get(opts, :env, %{})
-    workdir = Keyword.get(opts, :workdir, "/")
-
     body = %{
-      id: container_id,
       image: image,
-      cmd: ["sleep", "infinity"],
-      resources: %{
-        cpu: Keyword.get(opts, :vcpus, 1),
-        memory_mb: Keyword.get(opts, :memory_mb, 256)
-      }
-    } |> add_env_config(env, workdir)
+      agent_id: Keyword.get(opts, :agent_id),
+      vcpus: Keyword.get(opts, :vcpus, 1),
+      memory_mb: Keyword.get(opts, :memory_mb, 256),
+      metadata: Keyword.get(opts, :metadata, %{})
+    } |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()
 
-    with {:ok, created} <- post("/containers", body),
-         {:ok, _started} <- post("/containers/#{container_id}/start", %{}) do
-      {:ok,
-       %{
-         session_id: container_id,
-         container_id: container_id,
-         image: image,
-         status: "running",
-         created_at: DateTime.utc_now() |> DateTime.to_iso8601()
-       }}
-    else
+    case post("/sessions", body) do
+      {:ok, %{"session_id" => session_id} = resp} ->
+        {:ok,
+         %{
+           session_id: session_id,
+           container_id: resp["container_id"],
+           ip: resp["ip"],
+           image: resp["image"] || image,
+           agent_id: resp["agent_id"],
+           status: resp["status"],
+           created_at: resp["created_at"]
+         }}
+
       {:error, reason} ->
-        # Best-effort cleanup on failure
-        delete("/containers/#{container_id}")
         {:error, reason}
     end
   end
 
   @doc "Execute a command in an existing sandbox session."
   def session_exec(session_id, cmd, opts \\ []) do
-    env = Keyword.get(opts, :env, %{})
-    workdir = Keyword.get(opts, :workdir)
-    timeout = Keyword.get(opts, :timeout, 30)
-
     body = %{
       cmd: cmd,
-      env: env,
-      workdir: workdir,
-      timeout: timeout
+      env: Keyword.get(opts, :env, %{}),
+      workdir: Keyword.get(opts, :workdir),
+      timeout: Keyword.get(opts, :timeout, 30)
     } |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()
 
-    # Session exec uses the same /exec endpoint, referencing the session's container
-    case post("/exec", Map.put(body, :image, "session:#{session_id}")) do
+    case post("/sessions/#{session_id}/exec", body) do
       {:ok, %{"exit_code" => code} = result} ->
         {:ok,
          %{
            exit_code: code,
            stdout: result["stdout"] || "",
            stderr: result["stderr"] || "",
-           duration_ms: result["duration_ms"],
-           timed_out: result["timed_out"] || false
+           timed_out: result["timed_out"] || false,
+           session_id: result["session_id"],
+           container_id: result["container_id"]
          }}
 
       {:error, reason} ->
@@ -131,8 +128,7 @@ defmodule Mosaic.Fabric.Sandbox do
 
   @doc "Close and destroy a sandbox session."
   def session_close(session_id) do
-    _ = post("/containers/#{session_id}/stop", %{})
-    delete("/containers/#{session_id}")
+    delete("/sessions/#{session_id}")
     :ok
   end
 
@@ -142,6 +138,26 @@ defmodule Mosaic.Fabric.Sandbox do
       {:ok, stats} -> {:ok, stats}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  @doc "Request pre-warming of VMs for a specific image."
+  def warm_image(image_ref, count \\ 1) do
+    post("/images/#{image_ref}/warm", %{count: min(count, 10)})
+  end
+
+  @doc "Check how many warm VMs exist for an image."
+  def warm_status(image_ref) do
+    get("/images/#{image_ref}/warm-status")
+  end
+
+  @doc "Get session statistics."
+  def session_stats do
+    get("/sessions/stats")
+  end
+
+  @doc "List all active sessions."
+  def list_sessions do
+    get("/sessions")
   end
 
   # ── HTTP Helpers ──────────────────────────────────────────────
@@ -210,19 +226,6 @@ defmodule Mosaic.Fabric.Sandbox do
     Mosaic.Config.get(:fabric_sandbox_url) ||
       Application.get_env(:mosaic, :fabric, [])[:sandbox_url]
   end
-
-  defp random_id, do: :crypto.strong_rand_bytes(6) |> Base.encode16(case: :lower)
-
-  defp add_env_config(body, env, workdir) when map_size(env) > 0 do
-    env_list = Enum.map(env, fn {k, v} -> "#{k}=#{v}" end)
-    put_in(body, [:env], env_list)
-  end
-
-  defp add_env_config(body, _env, workdir) when not is_nil(workdir) do
-    Map.put(body, :workdir, workdir)
-  end
-
-  defp add_env_config(body, _env, _workdir), do: body
 
   defp truncate(str, max) when byte_size(str) > max do
     String.slice(str, 0, max) <> "..."
