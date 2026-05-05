@@ -1,0 +1,9 @@
+# MosaicDB — files excluded from Docker build context
+_build/
+deps/
+.git/
+erl_crash.dump
+.elixir_ls/
+node_modules/
+test/tmp/
+benches/results/
