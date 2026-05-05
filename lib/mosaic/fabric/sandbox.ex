@@ -155,11 +155,6 @@ defmodule Mosaic.Fabric.Sandbox do
     get("/sessions/stats")
   end
 
-  @doc "List all active sessions."
-  def list_sessions do
-    get("/sessions")
-  end
-
   # ── HTTP Helpers ──────────────────────────────────────────────
 
   defp post(path, body) do
@@ -189,6 +184,9 @@ defmodule Mosaic.Fabric.Sandbox do
     case Req.get(url, receive_timeout: 5_000) do
       {:ok, %{status: status, body: body}} when status in 200..299 ->
         {:ok, decode_body(body)}
+
+      {:ok, %{status: 404}} ->
+        {:error, :not_found}
 
       {:error, %Mint.TransportError{reason: :econnrefused}} ->
         {:error, :sandbox_unavailable}
