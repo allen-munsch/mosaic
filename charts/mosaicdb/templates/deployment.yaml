@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mosaicdb.fullname" . }}
+  labels: {{ include "mosaicdb.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: {{ include "mosaicdb.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels: {{ include "mosaicdb.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "mosaicdb.serviceAccountName" . }}
+      containers:
+        - name: mosaicdb
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.port }}
+              name: http
+          env:
+            - name: PORT
+              value: {{ .Values.service.port | quote }}
+            - name: STORAGE_PATH
+              value: {{ .Values.config.storagePath | quote }}
+            - name: MOSAIC_QUIET
+              value: "1"
+            - name: INDEX_STRATEGY
+              value: {{ .Values.config.indexStrategy | quote }}
+            - name: CACHE_BACKEND
+              value: {{ .Values.config.cacheBackend | quote }}
+            - name: MIN_SIMILARITY
+              value: {{ .Values.config.minSimilarity | quote }}
+            - name: QUERY_TIMEOUT
+              value: {{ .Values.config.queryTimeout | quote }}
+            {{- if .Values.mcp.enabled }}
+            - name: MCP_ENABLED
+              value: "true"
+            {{- end }}
+            {{- if .Values.redis.enabled }}
+            - name: REDIS_URL
+              value: {{ .Values.redis.url | quote }}
+            {{- end }}
+            {{- if .Values.auth.enabled }}
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mosaicdb.fullname" . }}-auth
+                  key: jwt-secret
+            - name: API_KEY_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mosaicdb.fullname" . }}-auth
+                  key: api-key-encryption-key
+            - name: AUTH_ENABLED
+              value: "true"
+            {{- end }}
+            {{- range .Values.extraEnv }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources: {{ toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - mountPath: {{ .Values.config.storagePath }}
+              name: shards
+            - mountPath: {{ .Values.config.routingDbPath | dir }}
+              name: config
+      volumes:
+        - name: shards
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "mosaicdb.fullname" . }}-shards
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: config
+          emptyDir: {}

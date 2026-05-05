@@ -4,6 +4,13 @@ defmodule Mosaic.API do
 
   plug(:parse_body)
   plug(Plug.Logger)
+
+  # Rate limiting (token-bucket, per tenant/IP)
+  plug(Mosaic.API.RateLimiter, rate: Mosaic.Config.get(:api_rate_limit_per_minute, 1000))
+
+  # Authentication — enabled by config, no-op when disabled
+  plug(:authenticate)
+
   plug(:match)
   plug(:dispatch)
 
@@ -30,7 +37,153 @@ defmodule Mosaic.API do
     send_resp(conn, 200, "ok")
   end
 
-  # HOT PATH: Semantic search
+  # ── Auth ──────────────────────────────────────────────────
+
+  post "/api/auth/login" do
+    # Placeholder: in production, validate credentials against auth db
+    if Mosaic.Config.get(:auth_enabled) do
+      username = conn.body_params["username"]
+      password = conn.body_params["password"]
+
+      if username && password do
+        {:ok, token, _claims} = Mosaic.Auth.JWT.generate_token(
+          username, ["read", "write"], ttl: 86_400
+        )
+        json_ok(conn, %{token: token, expires_in: 86_400})
+      else
+        json_error(conn, 401, "Invalid credentials")
+      end
+    else
+      json_ok(conn, %{token: "auth-disabled", note: "Set MOSAIC_AUTH_ENABLED=true to enable"})
+    end
+  end
+
+  post "/api/auth/keys" do
+    if Mosaic.Config.get(:auth_enabled) do
+      claims = conn.assigns[:auth_claims]
+      if claims && "admin" in (claims[:scopes] || []) do
+        scopes = conn.body_params["scopes"] || ["read"]
+        tenant_id = claims[:tenant_id] || "default"
+        {:ok, key, key_id} = Mosaic.Auth.APIKey.create_key(tenant_id, scopes)
+        json_ok(conn, 201, %{key: key, key_id: key_id})
+      else
+        json_error(conn, 403, "Admin scope required")
+      end
+    else
+      json_error(conn, 501, "Auth not enabled")
+    end
+  end
+
+  # ── Tenant Management ────────────────────────────────────
+
+  post "/api/tenants" do
+    if Mosaic.Config.get(:tenancy_enabled) do
+      with {:ok, name} <- require_param(conn.body_params, "name"),
+           {:ok, tenant_id} <- require_param(conn.body_params, "tenant_id") do
+        case Mosaic.Tenancy.Isolator.create_tenant(tenant_id, name) do
+          {:ok, tenant} -> json_ok(conn, 201, tenant)
+          {:error, reason} -> json_error(conn, 409, inspect(reason))
+        end
+      else
+        {:error, msg} -> json_error(conn, 400, msg)
+      end
+    else
+      json_error(conn, 501, "Multi-tenancy not enabled")
+    end
+  end
+
+  get "/api/tenants/:tenant_id" do
+    tid = conn.path_params["tenant_id"]
+    case Mosaic.Tenancy.Isolator.get_tenant(tid) do
+      {:ok, tenant} -> json_ok(conn, tenant)
+      {:error, :not_found} -> json_error(conn, 404, "Tenant not found")
+    end
+  end
+
+  # ── Agent Memory ─────────────────────────────────────────
+
+  post "/api/memory/remember" do
+    with {:ok, session_id} <- require_param(conn.body_params, "session_id"),
+         {:ok, content} <- require_param(conn.body_params, "content") do
+      type = (conn.body_params["type"] || "episodic") |> String.to_atom()
+      tags = conn.body_params["tags"] || []
+      importance = conn.body_params["importance"] || 0.5
+
+      case Mosaic.Memory.AgentMemory.remember(session_id, content,
+             type: type, tags: tags, importance: importance) do
+        {:ok, memory, stub} ->
+          json_ok(conn, 201, %{memory: memory, stub: stub})
+        error -> json_error(conn, 500, inspect(error))
+      end
+    else
+      {:error, msg} -> json_error(conn, 400, msg)
+    end
+  end
+
+  post "/api/memory/recall" do
+    with {:ok, session_id} <- require_param(conn.body_params, "session_id"),
+         {:ok, query} <- require_param(conn.body_params, "query") do
+      limit = conn.body_params["limit"] || 10
+
+      case Mosaic.Memory.AgentMemory.recall(session_id, query, limit: limit) do
+        {:ok, memories, handle} ->
+          json_ok(conn, %{memories: memories, handle: handle, count: length(memories)})
+        error -> json_error(conn, 500, inspect(error))
+      end
+    else
+      {:error, msg} -> json_error(conn, 400, msg)
+    end
+  end
+
+  post "/api/memory/consolidate" do
+    with {:ok, session_id} <- require_param(conn.body_params, "session_id") do
+      older_than_hours = conn.body_params["older_than_hours"] || 24
+
+      case Mosaic.Memory.AgentMemory.consolidate(session_id,
+             older_than: older_than_hours * 3_600_000) do
+        {:ok, result} -> json_ok(conn, result)
+        error -> json_error(conn, 500, inspect(error))
+      end
+    else
+      {:error, msg} -> json_error(conn, 400, msg)
+    end
+  end
+
+  get "/api/memory/stats/:session_id" do
+    sid = conn.path_params["session_id"]
+    case Mosaic.Memory.AgentMemory.stats(sid) do
+      {:ok, stats} -> json_ok(conn, stats)
+      error -> json_error(conn, 500, inspect(error))
+    end
+  end
+
+  # ── Semantic Cache ───────────────────────────────────────
+
+  get "/api/cache/stats" do
+    case Mosaic.Cache.SemanticCache.stats() do
+      {:ok, stats} -> json_ok(conn, stats)
+      _ -> json_error(conn, 500, "Cache stats unavailable")
+    end
+  end
+
+  post "/api/cache/purge" do
+    Mosaic.Cache.SemanticCache.purge_expired()
+    json_ok(conn, %{status: "purged"})
+  end
+
+  # ── Eval ─────────────────────────────────────────────────
+
+  get "/api/eval/report/:metric_type" do
+    mt = conn.path_params["metric_type"] |> String.to_atom()
+    last = (conn.params["last"] || "day") |> String.to_atom()
+
+    case Mosaic.Eval.Tracker.report(metric_type, last: last) do
+      {:ok, report} -> json_ok(conn, report)
+      error -> json_error(conn, 500, inspect(error))
+    end
+  end
+
+  # ── HOT PATH: Semantic search ────────────────────────────
   post "/api/search" do
     with {:ok, query} <- require_param(conn.body_params, "query") do
       opts = extract_search_opts(conn.body_params)
@@ -253,6 +406,14 @@ defmodule Mosaic.API do
   end
 
   # Helpers
+
+  defp authenticate(conn, _opts) do
+    if Mosaic.Config.get(:auth_enabled) do
+      Mosaic.Auth.Plug.call(conn, Mosaic.Auth.Plug.init([]))
+    else
+      conn
+    end
+  end
 
   defp require_param(params, key) do
     case Map.get(params, key) do

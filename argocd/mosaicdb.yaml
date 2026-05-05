@@ -1,0 +1,32 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mosaicdb
+  namespace: argocd
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/allen-munsch/mosaic
+    targetRevision: main
+    path: charts/mosaicdb
+    helm:
+      values: |
+        replicaCount: 3
+        persistence: { enabled: true, size: "100Gi" }
+        ingress: { enabled: true, hosts: [{ host: mosaicdb.example.com, paths: [{ path: /, pathType: Prefix }] }] }
+        autoscaling: { enabled: true, minReplicas: 3, maxReplicas: 10 }
+        resources: { requests: { memory: "4Gi", cpu: "2000m" }, limits: { memory: "16Gi", cpu: "8000m" } }
+        mcp: { enabled: true }
+        redis: { enabled: true }
+        auth: { enabled: true }
+        monitoring: { serviceMonitor: { enabled: true } }
+        networkPolicy: { enabled: true }
+        podDisruptionBudget: { enabled: true }
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: mosaicdb
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true, PruneLast=true]
+    retry: { limit: 5, backoff: { duration: "10s", factor: 2, maxDuration: "3m" } }
