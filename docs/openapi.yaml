@@ -1,0 +1,559 @@
+openapi: "3.0.3"
+info:
+  title: MosaicDB Thin CRUD API
+  version: "1.0.0"
+  description: >
+    Thin pass-through endpoints for MosaicDB federated memory fabric.
+    
+    **IMPORTANT**: For rich knowledge operations (semantic search, graph traversal,
+    handle expansion, cascaded vector search, DuckDB analytics), use MosaicDB's
+    native MCP endpoint at :4040/mcp with mosaic_* tools — NOT these thin proxies.
+    
+    These endpoints are for basic CRUD access and simple health/metrics queries.
+    All tools generated from this spec have _http suffixes to avoid collisions
+    with the native mosaic_* MCP tools.
+
+servers:
+  - url: http://mosaic:4040
+    description: MosaicDB HTTP API (thin CRUD only)
+
+paths:
+  # ── Health ──────────────────────────────────────────────
+  /health:
+    get:
+      operationId: mosaic_health_http
+      summary: MosaicDB health check
+      description: Returns 200 OK if the service is healthy
+      responses:
+        "200":
+          description: Service healthy
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "ok"
+
+  # ── Agent Memory ────────────────────────────────────────
+  /api/memory/remember:
+    post:
+      operationId: mosaic_memory_remember_http
+      summary: Store agent memory (thin — use native mosaic_memory_remember for rich features)
+      description: >
+        Store episodic, semantic, or procedural memory for an agent session.
+        For rich features (graph relationships, handle compression, importance scoring),
+        use the native mosaic_memory_remember MCP tool.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id, content]
+              properties:
+                session_id:
+                  type: string
+                  description: Agent session identifier
+                content:
+                  type: string
+                  description: Text content to remember
+                type:
+                  type: string
+                  enum: [episodic, semantic, procedural]
+                  default: episodic
+                  description: Memory type
+                tags:
+                  type: array
+                  items:
+                    type: string
+                  description: Categorization tags
+                importance:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                  default: 0.5
+                  description: Importance score
+      responses:
+        "201":
+          description: Memory stored successfully
+        "400":
+          description: Missing required parameters
+
+  /api/memory/recall:
+    post:
+      operationId: mosaic_memory_recall_http
+      summary: Recall agent memories (thin — use native mosaic_memory_recall for hybrid retrieval)
+      description: >
+        Recall memories for an agent session. For hybrid vector+graph retrieval
+        with importance scoring and handle compression, use the native
+        mosaic_memory_recall MCP tool.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id, query]
+              properties:
+                session_id:
+                  type: string
+                  description: Agent session identifier
+                query:
+                  type: string
+                  description: Natural language query for what to recall
+                limit:
+                  type: integer
+                  default: 10
+                  description: Maximum results
+      responses:
+        "200":
+          description: Memories retrieved
+
+  /api/memory/consolidate:
+    post:
+      operationId: mosaic_memory_consolidate_http
+      summary: Consolidate old episodic memories into semantic facts
+      description: >
+        Compress episodic memories older than the threshold into compact
+        semantic summaries. Reduces memory footprint and improves recall quality.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id]
+              properties:
+                session_id:
+                  type: string
+                  description: Agent session identifier
+                older_than_hours:
+                  type: integer
+                  default: 24
+                  description: Only consolidate memories older than this many hours
+      responses:
+        "200":
+          description: Consolidation result with counts per topic
+
+  /api/memory/stats/{session_id}:
+    get:
+      operationId: mosaic_memory_stats_http
+      summary: Get memory statistics for a session
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Memory statistics (total, episodic, semantic, procedural counts)
+
+  # ── Memo Search ─────────────────────────────────────────
+  /api/memo/search:
+    post:
+      operationId: mosaic_memo_search_http
+      summary: Full-text search across stored memos and handles
+      description: >
+        Search memo names and previews using FTS5 full-text search.
+        Memos are stored in the handle registry (separate from the vector index).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+                  description: Search query for memo names and previews
+                limit:
+                  type: integer
+                  default: 20
+                  description: Maximum results
+      responses:
+        "200":
+          description: Search results with handles and previews
+
+  # ── Prompt Registry ─────────────────────────────────────
+  /api/prompts:
+    get:
+      operationId: mosaic_prompt_list_http
+      summary: List all stored prompt templates
+      responses:
+        "200":
+          description: List of prompts with names, versions, and active status
+    post:
+      operationId: mosaic_prompt_store_http
+      summary: Store a new version of a prompt template
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, template]
+              properties:
+                name:
+                  type: string
+                  description: Prompt name (e.g., 'rag_system')
+                template:
+                  type: string
+                  description: Template with {{variable}} placeholders
+                model:
+                  type: string
+                  description: Target LLM model
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "201":
+          description: Prompt stored with version number
+
+  /api/prompts/render:
+    post:
+      operationId: mosaic_prompt_render_http
+      summary: Render a prompt template with variable substitution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  description: Prompt name
+                variables:
+                  type: object
+                  description: Variable name → value mapping
+                  additionalProperties: true
+                version:
+                  type: integer
+                  description: Specific version (default: active)
+      responses:
+        "200":
+          description: Rendered prompt with token estimate
+
+  /api/prompts/{name}/versions:
+    get:
+      operationId: mosaic_prompt_versions_http
+      summary: List all versions of a specific prompt
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Version history
+
+  /api/prompts/{name}/compare:
+    post:
+      operationId: mosaic_prompt_compare_http
+      summary: Compare two versions of a prompt
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version_a, version_b]
+              properties:
+                version_a:
+                  type: integer
+                version_b:
+                  type: integer
+      responses:
+        "200":
+          description: Diff between versions
+
+  # ── Agent Pipelines ─────────────────────────────────────
+  /api/pipelines:
+    get:
+      operationId: mosaic_pipeline_list_http
+      summary: List all agent workflow pipelines
+      responses:
+        "200":
+          description: Pipeline list with names, versions, step counts
+
+  /api/pipelines/run:
+    post:
+      operationId: mosaic_pipeline_run_http
+      summary: Execute a pipeline with parameters
+      description: >
+        Runs a predefined agent workflow pipeline with variable substitution.
+        Pipelines handle step sequencing, timing, error propagation, and
+        result storage automatically.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  description: Pipeline name
+                params:
+                  type: object
+                  description: Variable substitutions ({{key}} → value)
+                  additionalProperties: true
+                dry_run:
+                  type: boolean
+                  default: false
+                  description: If true, validates steps without executing
+      responses:
+        "200":
+          description: Pipeline results with handle stub, step timing, and execution stats
+
+  /api/pipelines/{name}/history:
+    get:
+      operationId: mosaic_pipeline_history_http
+      summary: Get execution history for a pipeline
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Execution history with version, params, elapsed time, result count
+
+  # ── Evaluation ──────────────────────────────────────────
+  /api/eval/report/{type}:
+    get:
+      operationId: mosaic_eval_report_http
+      summary: Get evaluation metrics report
+      description: >
+        Retrieves precision@K, recall@K, MRR, NDCG, and latency percentiles
+        for the specified evaluation type.
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+            example: retrieval
+          description: Evaluation metric type
+        - name: last
+          in: query
+          schema:
+            type: string
+            enum: [hour, day, week, month]
+            default: day
+      responses:
+        "200":
+          description: Evaluation report with all computed metrics
+
+  # ── Semantic Cache ──────────────────────────────────────
+  /api/cache/stats:
+    get:
+      operationId: mosaic_cache_stats_http
+      summary: Semantic cache statistics
+      description: >
+        Returns cache hit/miss counts, hit rate, active entries,
+        tokens saved, and estimated cost savings.
+      responses:
+        "200":
+          description: Cache statistics
+
+  /api/cache/purge:
+    post:
+      operationId: mosaic_cache_purge_http
+      summary: Purge expired cache entries
+      responses:
+        "200":
+          description: Purge completed
+
+  # ── Webhook Triggers ────────────────────────────────────
+  /api/triggers:
+    get:
+      operationId: mosaic_triggers_list_http
+      summary: List all webhook triggers
+      responses:
+        "200":
+          description: Trigger list with names, queries, thresholds, fire counts
+    post:
+      operationId: mosaic_trigger_create_http
+      summary: Create a webhook trigger
+      description: >
+        Triggers fire HTTP callbacks when ingested content matches a stored
+        semantic query. Results sent as document IDs, full text, or handle stubs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, query, webhook_url]
+              properties:
+                name:
+                  type: string
+                  description: Trigger name
+                query:
+                  type: string
+                  description: Semantic query to match against new content
+                webhook_url:
+                  type: string
+                  format: uri
+                  description: URL to POST matching results to
+                similarity_threshold:
+                  type: number
+                  default: 0.8
+                  minimum: 0
+                  maximum: 1
+                on_match:
+                  type: string
+                  enum: [send_document_ids, send_full_text, send_handle]
+                  default: send_document_ids
+      responses:
+        "201":
+          description: Trigger created
+
+  /api/triggers/{name}:
+    delete:
+      operationId: mosaic_trigger_delete_http
+      summary: Delete a webhook trigger
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Trigger deleted
+
+  /api/triggers/{name}/test:
+    post:
+      operationId: mosaic_trigger_test_http
+      summary: Test a trigger against sample content
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+                  description: Sample content to test against the trigger query
+      responses:
+        "200":
+          description: Test result (matches, similarity score, would_fire)
+
+  # ── Status ──────────────────────────────────────────────
+  /api/status:
+    get:
+      operationId: mosaic_status_http
+      summary: Full system status
+      description: Shard counts, node/edge counts, active handles, storage path
+      responses:
+        "200":
+          description: System status
+
+  /api/metrics:
+    get:
+      operationId: mosaic_metrics_http
+      summary: Service metrics
+      description: Cache hits/misses, shard count, DuckDB attached shards
+      responses:
+        "200":
+          description: Metrics snapshot
+
+  # ── Auth ────────────────────────────────────────────────
+  /api/auth/login:
+    post:
+      operationId: mosaic_auth_login_http
+      summary: Authenticate and receive JWT token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        "200":
+          description: JWT token with expiry
+
+  /api/auth/keys:
+    post:
+      operationId: mosaic_auth_create_key_http
+      summary: Create an API key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scopes:
+                  type: array
+                  items:
+                    type: string
+                  default: ["read"]
+      responses:
+        "201":
+          description: API key created
+
+  # ── Tenants ─────────────────────────────────────────────
+  /api/tenants:
+    post:
+      operationId: mosaic_tenant_create_http
+      summary: Create a tenant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tenant_id, name]
+              properties:
+                tenant_id:
+                  type: string
+                name:
+                  type: string
+                quota_bytes:
+                  type: integer
+      responses:
+        "201":
+          description: Tenant created with storage path
+
+  /api/tenants/{tenant_id}:
+    get:
+      operationId: mosaic_tenant_get_http
+      summary: Get tenant details
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Tenant info (storage path, quota, active status)
