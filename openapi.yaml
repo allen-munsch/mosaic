@@ -1,0 +1,1005 @@
+openapi: 3.0.3
+info:
+  title: MosaicDB API
+  description: 'Federated SQL Semantic Search & Analytics Engine with DuckDB,
+
+    SQLite shards, Property Graph, RAG, and MCP server.
+
+
+    ## Authentication
+
+    Most endpoints require a Bearer JWT token obtained via `/api/auth/login`.
+
+    Public endpoints: `/health`, `/mcp`, `/api/auth/login`.
+
+
+    ## MCP Integration
+
+    MosaicDB exposes an MCP (Model Context Protocol) endpoint at `/mcp`
+
+    for AI agent tool discovery and invocation. Tools are auto-generated
+
+    from this OpenAPI spec by yas-mcp.
+
+
+    ## Rate Limiting
+
+    Token-bucket rate limiter: 1000 req/min default.
+
+    Returns 429 with Retry-After header when exceeded.
+
+    '
+  version: 0.2.0
+  contact:
+    name: MosaicDB Maintainers
+    url: https://github.com/allen-munsch/mosaic
+servers:
+- url: http://localhost:4040
+  description: Local development
+- url: https://mosaicdb.example.com
+  description: Production (via ingress)
+tags:
+- name: Health
+- name: Auth
+- name: Memory
+- name: Cache
+- name: Search
+- name: Graph
+- name: Documents
+- name: Ingest
+- name: Pipelines
+- name: Prompts
+- name: Triggers
+- name: Eval
+- name: MCP
+- name: Admin
+- name: Tenants
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        detail:
+          type: string
+    TokenResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: JWT access token
+        expires_in:
+          type: integer
+          description: Token TTL in seconds
+    Memory:
+      type: object
+      properties:
+        id:
+          type: string
+        session_id:
+          type: string
+        type:
+          type: string
+          enum:
+          - episodic
+          - semantic
+          - procedural
+        content:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        importance:
+          type: number
+        metadata:
+          type: object
+        embedding:
+          type: array
+          items:
+            type: number
+          description: 384-dimensional vector embedding
+        created_at:
+          type: string
+          format: date-time
+    MemoryStoreRequest:
+      type: object
+      required:
+      - session_id
+      - content
+      properties:
+        session_id:
+          type: string
+        content:
+          type: string
+        type:
+          type: string
+          enum:
+          - episodic
+          - semantic
+          - procedural
+          default: episodic
+        tags:
+          type: array
+          items:
+            type: string
+        importance:
+          type: number
+          default: 0.5
+        metadata:
+          type: object
+    MemoryRecallRequest:
+      type: object
+      required:
+      - session_id
+      - query
+      properties:
+        session_id:
+          type: string
+        query:
+          type: string
+        limit:
+          type: integer
+          default: 10
+        types:
+          type: array
+          items:
+            type: string
+        min_similarity:
+          type: number
+          default: 0.1
+    SearchRequest:
+      type: object
+      required:
+      - query
+      properties:
+        query:
+          type: string
+        limit:
+          type: integer
+          default: 20
+        min_similarity:
+          type: number
+          default: 0.1
+        shard_limit:
+          type: integer
+    SearchResult:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+        similarity:
+          type: number
+        source_text:
+          type: string
+        file_path:
+          type: string
+    CacheStats:
+      type: object
+      properties:
+        total:
+          type: integer
+        hits:
+          type: integer
+        misses:
+          type: integer
+        hit_rate:
+          type: number
+        active_entries:
+          type: integer
+        tokens_saved:
+          type: integer
+        estimated_cost_saved:
+          type: number
+    Pipeline:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: integer
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/PipelineStep'
+        created_at:
+          type: string
+    PipelineStep:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+          - search
+          - filter
+          - traverse
+          - consolidate
+          - rank
+        config:
+          type: object
+    ShardInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        path:
+          type: string
+        doc_count:
+          type: integer
+        query_count:
+          type: integer
+    MCPInfo:
+      type: object
+      properties:
+        version:
+          type: string
+        protocol:
+          type: string
+        server:
+          type: object
+          properties:
+            name:
+              type: string
+            version:
+              type: string
+        endpoint:
+          type: string
+        transports:
+          type: array
+          items:
+            type: string
+security:
+- BearerAuth: []
+paths:
+  /health:
+    get:
+      tags:
+      - Health
+      summary: Health check
+      description: Returns 200 OK if the service is healthy. Public endpoint (no auth required).
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+      operationId: health_check
+  /api/auth/login:
+    post:
+      tags:
+      - Auth
+      summary: Login and get JWT token
+      description: Authenticate and receive a JWT bearer token. Public endpoint.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - username
+              - password
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      operationId: auth_login
+  /api/auth/keys:
+    post:
+      tags:
+      - Auth
+      summary: Create API key
+      description: Create a new API key for a tenant. Requires admin scope.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scopes:
+                  type: array
+                  items:
+                    type: string
+                  default:
+                  - read
+      responses:
+        '201':
+          description: API key created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:
+                    type: string
+                  key_id:
+                    type: string
+        '403':
+          description: Admin scope required
+      operationId: auth_create_key
+  /api/memory/remember:
+    post:
+      tags:
+      - Memory
+      operationId: memory_remember
+      summary: Store a memory with vector embedding
+      description: Stores an episodic/semantic/procedural memory with auto-generated embedding.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryStoreRequest'
+      responses:
+        '201':
+          description: Memory stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  memory:
+                    $ref: '#/components/schemas/Memory'
+                  stub:
+                    type: string
+                    description: Handle registry stub for token-efficient retrieval
+  /api/memory/recall:
+    post:
+      tags:
+      - Memory
+      operationId: memory_recall
+      summary: Recall memories by semantic similarity
+      description: Vector search across stored memories with hybrid filtering.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryRecallRequest'
+      responses:
+        '200':
+          description: Memories recalled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count:
+                    type: integer
+                  memories:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Memory'
+                  handle:
+                    type: string
+  /api/memory/consolidate:
+    post:
+      tags:
+      - Memory
+      operationId: memory_consolidate
+      summary: Consolidate episodic memories into semantic facts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                session_id:
+                  type: string
+                older_than_ms:
+                  type: integer
+                min_memories:
+                  type: integer
+      responses:
+        '200':
+          description: Consolidation results
+  /api/memory/stats/{session_id}:
+    get:
+      tags:
+      - Memory
+      operationId: memory_stats
+      summary: Get memory statistics for a session
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Memory statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                  episodic:
+                    type: integer
+                  semantic:
+                    type: integer
+  /api/cache/stats:
+    get:
+      tags:
+      - Cache
+      operationId: cache_stats
+      summary: Get cache statistics
+      responses:
+        '200':
+          description: Cache statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CacheStats'
+  /api/cache/purge:
+    post:
+      tags:
+      - Cache
+      operationId: cache_purge
+      summary: Purge expired cache entries
+      responses:
+        '200':
+          description: Cache purged
+  /api/search:
+    post:
+      tags:
+      - Search
+      operationId: search_vector
+      summary: Vector semantic search
+      description: Cascaded matryoshka search (64→128→256→384d) across all shards.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SearchResult'
+                  count:
+                    type: integer
+  /api/search/grounded:
+    post:
+      tags:
+      - Search
+      operationId: search_grounded
+      summary: Grounded search with citation references
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query:
+                  type: string
+                limit:
+                  type: integer
+      responses:
+        '200':
+          description: Grounded search results with citations
+  /api/search/hybrid:
+    post:
+      tags:
+      - Search
+      operationId: search_hybrid
+      summary: Hybrid vector + SQL search
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query:
+                  type: string
+                sql_filter:
+                  type: string
+                limit:
+                  type: integer
+      responses:
+        '200':
+          description: Hybrid search results
+  /api/query:
+    post:
+      tags:
+      - Search
+      summary: Raw SQL query across shards
+      description: Federated SQL with DuckDB warm path + SQLite hot path.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sql:
+                  type: string
+                params:
+                  type: array
+                  items: {}
+      responses:
+        '200':
+          description: Query results
+      operationId: query_sql
+  /api/shards:
+    get:
+      tags:
+      - Graph
+      operationId: shards_list
+      summary: List all shards
+      responses:
+        '200':
+          description: Shard list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ShardInfo'
+  /api/documents:
+    post:
+      tags:
+      - Documents
+      operationId: document_index
+      summary: Index a document
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+                metadata:
+                  type: object
+      responses:
+        '201':
+          description: Document indexed
+  /api/documents/{id}:
+    delete:
+      tags:
+      - Documents
+      summary: Delete a document
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Document deleted
+      operationId: document_delete
+  /api/pipelines:
+    get:
+      tags:
+      - Pipelines
+      summary: List all pipelines
+      responses:
+        '200':
+          description: Pipeline list
+      operationId: pipeline_list
+    post:
+      tags:
+      - Pipelines
+      summary: Define a pipeline
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                steps:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/PipelineStep'
+      responses:
+        '200':
+          description: Pipeline defined
+      operationId: pipeline_define
+  /api/pipelines/run:
+    post:
+      tags:
+      - Pipelines
+      operationId: pipeline_run
+      summary: Execute a pipeline
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                version:
+                  type: integer
+                params:
+                  type: object
+                dry_run:
+                  type: boolean
+      responses:
+        '200':
+          description: Pipeline execution results
+  /api/pipelines/{name}/history:
+    get:
+      tags:
+      - Pipelines
+      summary: Pipeline execution history
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Execution history
+      operationId: pipeline_history
+  /api/prompts:
+    get:
+      tags:
+      - Prompts
+      summary: List all prompts
+      responses:
+        '200':
+          description: Prompt list
+      operationId: prompt_list
+    post:
+      tags:
+      - Prompts
+      summary: Create a prompt template
+      responses:
+        '201':
+          description: Prompt created
+      operationId: prompt_create
+  /api/prompts/render:
+    post:
+      tags:
+      - Prompts
+      summary: Render a prompt with variables
+      responses:
+        '200':
+          description: Rendered prompt
+      operationId: prompt_render
+  /api/prompts/{name}:
+    get:
+      tags:
+      - Prompts
+      summary: Get latest prompt version
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Prompt details
+      operationId: prompt_get
+  /api/prompts/{name}/versions:
+    get:
+      tags:
+      - Prompts
+      summary: List prompt versions
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Version list
+      operationId: prompt_versions
+  /api/prompts/{name}/rollback:
+    post:
+      tags:
+      - Prompts
+      summary: Rollback to a specific version
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Rollback complete
+      operationId: prompt_rollback
+  /api/prompts/{name}/compare:
+    post:
+      tags:
+      - Prompts
+      summary: Compare two prompt versions
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Version diff
+      operationId: prompt_compare
+  /api/triggers:
+    get:
+      tags:
+      - Triggers
+      summary: List all triggers
+      responses:
+        '200':
+          description: Trigger list
+      operationId: trigger_list
+    post:
+      tags:
+      - Triggers
+      summary: Create a trigger
+      responses:
+        '201':
+          description: Trigger created
+      operationId: trigger_create
+  /api/triggers/{name}/test:
+    post:
+      tags:
+      - Triggers
+      summary: Test a trigger against content
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Test results
+      operationId: trigger_test
+  /api/triggers/{name}:
+    delete:
+      tags:
+      - Triggers
+      summary: Delete a trigger
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Trigger deleted
+      operationId: trigger_delete
+  /api/ingest/image:
+    post:
+      tags:
+      - Ingest
+      summary: Ingest an image with caption extraction
+      responses:
+        '200':
+          description: Image ingested
+      operationId: ingest_image
+  /api/ingest/audio:
+    post:
+      tags:
+      - Ingest
+      summary: Ingest audio with transcription
+      responses:
+        '200':
+          description: Audio ingested
+      operationId: ingest_audio
+  /api/ingest/youtube:
+    post:
+      tags:
+      - Ingest
+      summary: Ingest a YouTube video with transcript
+      responses:
+        '200':
+          description: Video ingested
+      operationId: ingest_youtube
+  /api/ingest/media:
+    post:
+      tags:
+      - Ingest
+      summary: Ingest media file (auto-detect type)
+      responses:
+        '200':
+          description: Media ingested
+      operationId: ingest_media
+  /api/eval/report/{metric_type}:
+    get:
+      tags:
+      - Eval
+      summary: Get evaluation metrics report
+      parameters:
+      - name: metric_type
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Metric type (e.g., retrieval, pipeline)
+      responses:
+        '200':
+          description: Metrics report
+      operationId: eval_report
+  /mcp:
+    get:
+      tags:
+      - MCP
+      summary: MCP server info
+      description: Returns MCP protocol version and server metadata. Public endpoint.
+      security: []
+      responses:
+        '200':
+          description: MCP server information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MCPInfo'
+      operationId: mcp_info
+    post:
+      tags:
+      - MCP
+      summary: MCP JSON-RPC endpoint
+      description: Accepts MCP JSON-RPC requests for tool discovery and invocation. Public endpoint.
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                jsonrpc:
+                  type: string
+                  enum:
+                  - '2.0'
+                method:
+                  type: string
+                params:
+                  type: object
+                id:
+                  type: integer
+      responses:
+        '200':
+          description: JSON-RPC response
+      operationId: mcp_rpc
+  /api/admin/refresh-duckdb:
+    post:
+      tags:
+      - Admin
+      summary: Refresh DuckDB analytics cache
+      responses:
+        '200':
+          description: Cache refreshed
+      operationId: admin_refresh_duckdb
+  /api/admin/clear-cache:
+    post:
+      tags:
+      - Admin
+      summary: Clear all caches
+      responses:
+        '200':
+          description: Caches cleared
+      operationId: admin_clear_cache
+  /api/metrics:
+    get:
+      tags:
+      - Admin
+      summary: Prometheus metrics endpoint
+      responses:
+        '200':
+          description: Metrics in Prometheus format
+          content:
+            text/plain:
+              schema:
+                type: string
+      operationId: admin_metrics
+  /api/tenants:
+    post:
+      tags:
+      - Tenants
+      summary: Create a tenant
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tenant_id:
+                  type: string
+                name:
+                  type: string
+      responses:
+        '201':
+          description: Tenant created
+      operationId: tenant_create
+  /api/tenants/{tenant_id}:
+    get:
+      tags:
+      - Tenants
+      summary: Get tenant info
+      parameters:
+      - name: tenant_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Tenant details
+      operationId: tenant_get
+  /.well-known/agent.json:
+    get:
+      tags:
+      - MCP
+      summary: A2A Agent Card
+      description: 'Returns the Agent-to-Agent (A2A) Agent Card for MosaicDB.
+
+        Describes capabilities, endpoints, protocols, and authentication
+
+        for direct agent discovery and delegation.
+
+        Public endpoint (no auth required).
+
+        '
+      security: []
+      responses:
+        '200':
+          description: Agent Card
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  version:
+                    type: string
+                  capabilities:
+                    type: object
+                  endpoints:
+                    type: object
+                  protocols:
+                    type: object
+                  auth:
+                    type: object
+                  default_skills:
+                    type: array
+      operationId: a2a_agent_card

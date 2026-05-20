@@ -1,0 +1,31 @@
+# ── MosaicDB Docker Compose (CUDA/GPU) ──────────────────────────
+# GPU-accelerated deployment with NVIDIA CUDA support.
+# Requires nvidia-container-toolkit: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit
+#
+# Quick start:
+#   docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d
+# ────────────────────────────────────────────────────────────────
+
+services:
+  mosaic:
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda
+    environment:
+      # Override for CUDA
+      EMBEDDING_PROVIDER: bumblebee
+      EMBEDDING_BATCH_SIZE: "16"
+      XLA_TARGET: cuda12
+      XLA_GPU_MEM_ALLOCATION: "0.8"
+      NX_CLIENT: cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536

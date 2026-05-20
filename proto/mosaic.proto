@@ -1,0 +1,290 @@
+syntax = "proto3";
+
+package mosaic.v1;
+
+// ── MosaicDB gRPC Service ──────────────────────────────────────
+// Typed RPCs for graph traversal, vector search, memory, and analytics.
+// REST API remains on :4040. gRPC on :4041.
+
+service MosaicService {
+  // ── Search ──────────────────────────────────────────────
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc HybridSearch(HybridSearchRequest) returns (SearchResponse);
+  rpc GroundedSearch(GroundedSearchRequest) returns (GroundedSearchResponse);
+
+  // ── Graph ───────────────────────────────────────────────
+  rpc Traverse(TraverseRequest) returns (TraverseResponse);
+  rpc GraphReport(GraphReportRequest) returns (GraphReportResponse);
+  rpc Analytics(AnalyticsRequest) returns (AnalyticsResponse);
+
+  // ── Memory ──────────────────────────────────────────────
+  rpc MemoStore(MemoStoreRequest) returns (MemoStoreResponse);
+  rpc MemoSearch(MemoSearchRequest) returns (MemoSearchResponse);
+  rpc MemoDelete(MemoDeleteRequest) returns (MemoDeleteResponse);
+
+  // ── Memory RAG ──────────────────────────────────────────
+  rpc MemoryRemember(MemoryRememberRequest) returns (MemoryRememberResponse);
+  rpc MemoryRecall(MemoryRecallRequest) returns (MemoryRecallResponse);
+  rpc MemoryStats(MemoryStatsRequest) returns (MemoryStatsResponse);
+
+  // ── Health ──────────────────────────────────────────────
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Search
+// ═══════════════════════════════════════════════════════════════
+
+message SearchRequest {
+  string query = 1;
+  uint32 limit = 2;
+  double min_similarity = 3;
+  optional uint32 shard_limit = 4;
+}
+
+message SearchResponse {
+  repeated SearchResult results = 1;
+  uint32 count = 2;
+  uint64 elapsed_ms = 3;
+}
+
+message SearchResult {
+  string id = 1;
+  string name = 2;
+  string type = 3;
+  double similarity = 4;
+  string source_text = 5;
+  string file_path = 6;
+}
+
+message HybridSearchRequest {
+  string query = 1;
+  string sql_filter = 2;
+  uint32 limit = 3;
+  double min_similarity = 4;
+}
+
+message GroundedSearchRequest {
+  string query = 1;
+  uint32 limit = 2;
+}
+
+message GroundedSearchResponse {
+  repeated GroundedResult results = 1;
+  uint32 count = 2;
+}
+
+message GroundedResult {
+  string id = 1;
+  string text = 2;
+  double similarity = 3;
+  repeated Citation citations = 4;
+}
+
+message Citation {
+  string source = 1;
+  uint32 line_start = 2;
+  uint32 line_end = 3;
+  string excerpt = 4;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Graph
+// ═══════════════════════════════════════════════════════════════
+
+message TraverseRequest {
+  string start_node_id = 1;
+  uint32 max_depth = 2;
+  TraverseDirection direction = 3;
+  repeated string edge_types = 4;  // filters: "calls", "contains", "imports"
+  optional uint32 limit = 5;
+}
+
+enum TraverseDirection {
+  TRAVERSE_OUTGOING = 0;
+  TRAVERSE_INCOMING = 1;
+  TRAVERSE_BOTH = 2;
+}
+
+message TraverseResponse {
+  repeated GraphNode nodes = 1;
+  repeated GraphEdge edges = 2;
+  uint32 node_count = 3;
+  uint32 edge_count = 4;
+  uint64 elapsed_ms = 5;
+}
+
+message GraphNode {
+  string id = 1;
+  string name = 2;
+  string type = 3;
+  optional string language = 4;
+  optional string file_path = 5;
+  optional string source_text = 6;
+  optional string parent_id = 7;
+  map<string, string> properties = 8;
+}
+
+message GraphEdge {
+  string id = 1;
+  string source_id = 2;
+  string target_id = 3;
+  string type = 4;
+  optional string confidence = 5;
+  map<string, string> properties = 6;
+}
+
+message GraphReportRequest {
+  optional uint32 max_nodes = 1;
+  optional uint32 max_depth = 2;
+}
+
+message GraphReportResponse {
+  uint32 total_nodes = 1;
+  uint32 total_edges = 2;
+  repeated TypeDistribution type_distribution = 3;
+  repeated ModuleStats top_modules = 4;
+  string report_json = 5;  // Full report as JSON for flexibility
+}
+
+message TypeDistribution {
+  string type = 1;
+  uint32 count = 2;
+}
+
+message ModuleStats {
+  string name = 1;
+  uint32 function_count = 2;
+  uint32 edge_count = 3;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Analytics (SQL)
+// ═══════════════════════════════════════════════════════════════
+
+message AnalyticsRequest {
+  string sql = 1;
+  repeated string params = 2;  // JSON-encoded parameter values
+  optional bool use_duckdb = 3;  // warm path (DuckDB) vs hot path (SQLite)
+}
+
+message AnalyticsResponse {
+  repeated Row rows = 1;
+  uint32 row_count = 2;
+  uint64 elapsed_ms = 3;
+  string engine = 4;  // "duckdb" or "sqlite"
+}
+
+message Row {
+  repeated string columns = 1;  // All values as strings for simplicity
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Memo (Handle Registry)
+// ═══════════════════════════════════════════════════════════════
+
+message MemoStoreRequest {
+  string label = 1;
+  string content = 2;  // JSON-encoded value
+  optional uint32 ttl_seconds = 3;
+}
+
+message MemoStoreResponse {
+  string handle = 1;   // e.g., "$memo_abc123"
+  uint64 created_at = 2;
+}
+
+message MemoSearchRequest {
+  string query = 1;
+  uint32 limit = 2;
+}
+
+message MemoSearchResponse {
+  repeated MemoResult results = 1;
+  uint32 count = 2;
+}
+
+message MemoResult {
+  string handle = 1;
+  string label = 2;
+  string preview = 3;
+  uint64 created_at = 4;
+}
+
+message MemoDeleteRequest {
+  string handle = 1;  // e.g., "$memo_abc123"
+}
+
+message MemoDeleteResponse {
+  bool deleted = 1;
+  string handle = 2;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Memory RAG
+// ═══════════════════════════════════════════════════════════════
+
+message MemoryRememberRequest {
+  string session_id = 1;
+  string content = 2;
+  optional string type = 3;   // "episodic", "semantic", "procedural"
+  repeated string tags = 4;
+  optional double importance = 5;
+  optional map<string, string> metadata = 6;
+}
+
+message MemoryRememberResponse {
+  MemoryRecord memory = 1;
+  string stub = 2;
+}
+
+message MemoryRecord {
+  string id = 1;
+  string session_id = 2;
+  string type = 3;
+  string content = 4;
+  repeated string tags = 5;
+  double importance = 6;
+  repeated double embedding = 7;   // 384-dimensional vector
+  string created_at = 8;
+  uint32 access_count = 9;
+}
+
+message MemoryRecallRequest {
+  string session_id = 1;
+  string query = 2;
+  optional uint32 limit = 3;
+  repeated string types = 4;       // filter by memory type
+  optional double min_similarity = 5;
+}
+
+message MemoryRecallResponse {
+  repeated MemoryRecord memories = 1;
+  uint32 count = 2;
+  string handle = 3;  // Handle registry stub for token-efficient retrieval
+}
+
+message MemoryStatsRequest {
+  string session_id = 1;
+}
+
+message MemoryStatsResponse {
+  uint32 total = 1;
+  uint32 episodic = 2;
+  uint32 semantic = 3;
+  uint32 procedural = 4;
+  uint32 consolidated = 5;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Health
+// ═══════════════════════════════════════════════════════════════
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;     // "ok" or "degraded"
+  string version = 2;
+  uint64 uptime_seconds = 3;
+  map<string, string> checks = 4;  // component health checks
+}

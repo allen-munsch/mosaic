@@ -1,0 +1,641 @@
+# MosaicDB: Extended Roadmap with Plugin System & AST Queries
+
+---
+
+## Phase 1.5: Extension System (1-2 weeks)
+
+**Goal:** Pluggable architecture for custom indexers, analyzers, and query types
+
+### 1.5.1 Extension Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        MosaicDB Core                             │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
+│  │ Storage     │  │ Query       │  │ Index       │              │
+│  │ Engine      │  │ Engine      │  │ Engine      │              │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘              │
+│         │                │                │                      │
+│         ▼                ▼                ▼                      │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                 Extension Manager                        │    │
+│  │  • Register/unregister extensions                        │    │
+│  │  • Route queries to appropriate handlers                 │    │
+│  │  • Manage extension lifecycle                            │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│         │                │                │                      │
+├─────────┼────────────────┼────────────────┼──────────────────────┤
+│         ▼                ▼                ▼                      │
+│  ┌───────────┐    ┌───────────┐    ┌───────────┐                │
+│  │ AST       │    │ Image     │    │ Custom    │                │
+│  │ Extension │    │ Extension │    │ Extension │                │
+│  └───────────┘    └───────────┘    └───────────┘                │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 1.5.2 Extension Behaviours
+
+```elixir
+defmodule Mosaic.Extension do
+  @moduledoc "Base behaviour for MosaicDB extensions"
+  
+  @type extension_id :: atom()
+  @type content :: binary()
+  @type metadata :: map()
+  
+  # Extension identity
+  @callback id() :: extension_id()
+  @callback name() :: String.t()
+  @callback version() :: String.t()
+  @callback description() :: String.t()
+  
+  # Content handling
+  @callback supports?(mime_type :: String.t(), path :: String.t()) :: boolean()
+  @callback extract(content, metadata) :: {:ok, map()} | {:error, term()}
+  
+  # Indexing
+  @callback index(node_id :: String.t(), extracted :: map()) :: {:ok, term()} | {:error, term()}
+  
+  # Querying
+  @callback query_types() :: [atom()]
+  @callback execute_query(query_type :: atom(), query :: term(), opts :: keyword()) :: {:ok, [term()]} | {:error, term()}
+  
+  # Schema extensions
+  @callback schema_migrations() :: [String.t()]
+  
+  # Optional callbacks
+  @optional_callbacks [schema_migrations: 0]
+end
+```
+
+### 1.5.3 Extension Manager
+
+```elixir
+defmodule Mosaic.ExtensionManager do
+  use GenServer
+  
+  defstruct [:extensions, :query_handlers, :content_handlers]
+  
+  def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  
+  # Registration
+  def register(extension_module)
+  def unregister(extension_id)
+  def list()
+  def get(extension_id)
+  
+  # Content routing
+  def find_handler(mime_type, path)
+  def extract_all(content, metadata)
+  
+  # Query routing
+  def route_query(query_type, query, opts)
+  def supported_query_types()
+  
+  # Lifecycle
+  def init_extension(extension_id)
+  def shutdown_extension(extension_id)
+end
+```
+
+### 1.5.4 Extension Configuration
+
+```elixir
+# config/config.exs
+config :mosaic, :extensions, [
+  {Mosaic.Extensions.AST, enabled: true, languages: [:elixir, :python, :javascript, :go, :rust]},
+  {Mosaic.Extensions.Image, enabled: true, extract_text: true},
+  {Mosaic.Extensions.PDF, enabled: true},
+  {Mosaic.Extensions.Markdown, enabled: true, extract_links: true}
+]
+```
+
+---
+
+## Phase 2.5: AST Extension (2-3 weeks)
+
+**Goal:** Sourcegraph-like structural code search across the codebase
+
+### 2.5.1 Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     AST Extension                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐          │
+│  │ Tree-sitter │    │ AST         │    │ Symbol      │          │
+│  │ Parsers     │───►│ Normalizer  │───►│ Extractor   │          │
+│  └─────────────┘    └─────────────┘    └─────────────┘          │
+│         │                                     │                  │
+│         ▼                                     ▼                  │
+│  ┌─────────────┐                      ┌─────────────┐           │
+│  │ AST Storage │                      │ Symbol Index│           │
+│  │ (SQLite)    │                      │ (SQLite+VSS)│           │
+│  └─────────────┘                      └─────────────┘           │
+│         │                                     │                  │
+│         └──────────────┬──────────────────────┘                  │
+│                        ▼                                         │
+│                 ┌─────────────┐                                  │
+│                 │ Query Engine│                                  │
+│                 │ • Pattern   │                                  │
+│                 │ • Semantic  │                                  │
+│                 │ • Structural│                                  │
+│                 └─────────────┘                                  │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 2.5.2 AST Schema
+
+```sql
+-- AST nodes table (per shard)
+CREATE TABLE ast_nodes (
+  id TEXT PRIMARY KEY,
+  file_id TEXT NOT NULL,           -- FK to documents
+  node_type TEXT NOT NULL,          -- function_def, class_def, call, etc.
+  name TEXT,                        -- identifier name if applicable
+  language TEXT NOT NULL,
+  start_line INTEGER,
+  start_col INTEGER,
+  end_line INTEGER,
+  end_col INTEGER,
+  parent_id TEXT,                   -- parent AST node
+  depth INTEGER,                    -- tree depth
+  source_text TEXT,                 -- actual code snippet
+  properties TEXT,                  -- JSON: modifiers, annotations, etc.
+  FOREIGN KEY (file_id) REFERENCES documents(id),
+  FOREIGN KEY (parent_id) REFERENCES ast_nodes(id)
+);
+
+-- Symbol definitions
+CREATE TABLE symbols (
+  id TEXT PRIMARY KEY,
+  ast_node_id TEXT NOT NULL,
+  file_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  qualified_name TEXT,              -- full.path.to.Symbol
+  kind TEXT NOT NULL,               -- function, class, variable, type, etc.
+  language TEXT NOT NULL,
+  visibility TEXT,                  -- public, private, protected
+  signature TEXT,                   -- function signature
+  doc_comment TEXT,
+  properties TEXT,                  -- JSON: type info, modifiers
+  embedding BLOB,                   -- semantic embedding of docstring + name
+  FOREIGN KEY (ast_node_id) REFERENCES ast_nodes(id),
+  FOREIGN KEY (file_id) REFERENCES documents(id)
+);
+
+-- Symbol references (usages)
+CREATE TABLE symbol_refs (
+  id TEXT PRIMARY KEY,
+  symbol_id TEXT,                   -- resolved symbol (nullable if unresolved)
+  file_id TEXT NOT NULL,
+  name TEXT NOT NULL,               -- reference name as written
+  ref_type TEXT,                    -- call, import, type_annotation, etc.
+  start_line INTEGER,
+  start_col INTEGER,
+  context TEXT,                     -- surrounding code context
+  FOREIGN KEY (symbol_id) REFERENCES symbols(id),
+  FOREIGN KEY (file_id) REFERENCES documents(id)
+);
+
+-- Indexes
+CREATE INDEX idx_ast_file ON ast_nodes(file_id);
+CREATE INDEX idx_ast_type ON ast_nodes(node_type);
+CREATE INDEX idx_ast_name ON ast_nodes(name);
+CREATE INDEX idx_ast_parent ON ast_nodes(parent_id);
+
+CREATE INDEX idx_symbols_name ON symbols(name);
+CREATE INDEX idx_symbols_qualified ON symbols(qualified_name);
+CREATE INDEX idx_symbols_kind ON symbols(kind);
+CREATE INDEX idx_symbols_file ON symbols(file_id);
+
+CREATE INDEX idx_refs_symbol ON symbol_refs(symbol_id);
+CREATE INDEX idx_refs_file ON symbol_refs(file_id);
+CREATE INDEX idx_refs_name ON symbol_refs(name);
+
+-- VSS for semantic symbol search
+CREATE VIRTUAL TABLE symbols_vss USING vss0(embedding(384));
+```
+
+### 2.5.3 Tree-sitter Integration
+
+```elixir
+defmodule Mosaic.Extensions.AST.Parser do
+  @moduledoc "Tree-sitter based parsing using NIF bindings"
+  
+  # Use tree_sitter_nif or rustler bindings
+  
+  @supported_languages %{
+    elixir: "tree-sitter-elixir",
+    python: "tree-sitter-python", 
+    javascript: "tree-sitter-javascript",
+    typescript: "tree-sitter-typescript",
+    go: "tree-sitter-go",
+    rust: "tree-sitter-rust",
+    ruby: "tree-sitter-ruby",
+    java: "tree-sitter-java",
+    c: "tree-sitter-c",
+    cpp: "tree-sitter-cpp"
+  }
+  
+  def parse(source, language) when is_atom(language) do
+    case Map.get(@supported_languages, language) do
+      nil -> {:error, :unsupported_language}
+      grammar -> do_parse(source, grammar)
+    end
+  end
+  
+  def detect_language(path) do
+    case Path.extname(path) do
+      ".ex" -> :elixir
+      ".exs" -> :elixir
+      ".py" -> :python
+      ".js" -> :javascript
+      ".ts" -> :typescript
+      ".go" -> :go
+      ".rs" -> :rust
+      ".rb" -> :ruby
+      ".java" -> :java
+      ".c" -> :c
+      ".cpp" -> :cpp
+      ".h" -> :c
+      _ -> :unknown
+    end
+  end
+  
+  defp do_parse(source, grammar) do
+    # Returns normalized AST
+    {:ok, %AST{
+      root: root_node,
+      language: language,
+      source: source
+    }}
+  end
+end
+```
+
+### 2.5.4 Symbol Extraction
+
+```elixir
+defmodule Mosaic.Extensions.AST.SymbolExtractor do
+  @moduledoc "Extract symbols from parsed AST"
+  
+  def extract(ast) do
+    %{
+      definitions: extract_definitions(ast),
+      references: extract_references(ast),
+      imports: extract_imports(ast),
+      exports: extract_exports(ast)
+    }
+  end
+  
+  defp extract_definitions(ast) do
+    ast
+    |> traverse(&is_definition?/1)
+    |> Enum.map(&to_symbol/1)
+  end
+  
+  defp is_definition?(node) do
+    node.type in [
+      :function_definition,
+      :class_definition,
+      :module_definition,
+      :variable_declaration,
+      :type_definition,
+      :interface_definition,
+      :struct_definition,
+      :enum_definition
+    ]
+  end
+  
+  defp to_symbol(node) do
+    %Symbol{
+      name: extract_name(node),
+      qualified_name: build_qualified_name(node),
+      kind: symbol_kind(node.type),
+      signature: extract_signature(node),
+      doc_comment: extract_doc(node),
+      location: node.location,
+      visibility: extract_visibility(node)
+    }
+  end
+end
+```
+
+### 2.5.5 Query Language
+
+```elixir
+defmodule Mosaic.Extensions.AST.Query do
+  @moduledoc """
+  Structural code search query language
+  
+  Examples:
+    # Find all functions named "handle_*"
+    {:pattern, :function, name: ~r/^handle_/}
+    
+    # Find all calls to Enum.map
+    {:call, module: Enum, function: :map}
+    
+    # Find functions with specific signature pattern
+    {:function, params: [{:_, :conn}, {:_, :params}], returns: :json}
+    
+    # Semantic: find functions similar to a description
+    {:semantic, "functions that handle HTTP requests"}
+    
+    # Structural pattern (like comby/semgrep)
+    {:structural, "def :[name](:[args]) do :[body] end"}
+    
+    # Combined
+    {:and, [
+      {:pattern, :function, name: ~r/^handle_/},
+      {:has_child, {:call, function: :render}}
+    ]}
+  """
+  
+  def execute(query, opts \\ [])
+  
+  # Pattern-based search
+  def execute({:pattern, node_type, filters}, opts) do
+    sql = build_pattern_sql(node_type, filters)
+    Mosaic.FederatedQuery.execute(sql, [], opts)
+  end
+  
+  # Find all callers of a symbol
+  def execute({:callers, symbol_name}, opts) do
+    """
+    SELECT DISTINCT sr.file_id, sr.start_line, sr.context
+    FROM symbol_refs sr
+    JOIN symbols s ON sr.symbol_id = s.id
+    WHERE s.qualified_name = ? OR s.name = ?
+    """
+    |> Mosaic.FederatedQuery.execute([symbol_name, symbol_name], opts)
+  end
+  
+  # Find all usages of a symbol
+  def execute({:usages, symbol_name}, opts) do
+    """
+    SELECT sr.file_id, sr.start_line, sr.ref_type, sr.context
+    FROM symbol_refs sr
+    WHERE sr.name = ?
+    ORDER BY sr.file_id, sr.start_line
+    """
+    |> Mosaic.FederatedQuery.execute([symbol_name], opts)
+  end
+  
+  # Find definition of symbol
+  def execute({:definition, symbol_name}, opts) do
+    """
+    SELECT s.*, d.text as file_content
+    FROM symbols s
+    JOIN documents d ON s.file_id = d.id
+    WHERE s.name = ? OR s.qualified_name = ?
+    """
+    |> Mosaic.FederatedQuery.execute([symbol_name, symbol_name], opts)
+  end
+  
+  # Semantic search for symbols
+  def execute({:semantic, description}, opts) do
+    embedding = Mosaic.EmbeddingService.encode(description)
+    embedding_json = Jason.encode!(embedding)
+    
+    """
+    SELECT s.*, d.text, distance
+    FROM symbols_vss 
+    WHERE vss_search(embedding, ?) LIMIT ?
+    JOIN symbols s ON symbols_vss.rowid = s.rowid
+    JOIN documents d ON s.file_id = d.id
+    """
+    |> Mosaic.FederatedQuery.execute([embedding_json, opts[:limit] || 20], opts)
+  end
+  
+  # Structural pattern matching (comby-style)
+  def execute({:structural, pattern, language}, opts) do
+    matcher = compile_structural_pattern(pattern, language)
+    
+    # Fan out to shards, apply matcher
+    Mosaic.FederatedQuery.execute(
+      "SELECT id, text FROM documents WHERE metadata->>'language' = ?",
+      [to_string(language)],
+      opts
+    )
+    |> Enum.flat_map(fn [id, source] ->
+      case match_structural(matcher, source) do
+        [] -> []
+        matches -> Enum.map(matches, &Map.put(&1, :file_id, id))
+      end
+    end)
+  end
+  
+  # Find similar code blocks
+  def execute({:similar_code, code_snippet}, opts) do
+    embedding = Mosaic.EmbeddingService.encode(code_snippet)
+    # Search both document embeddings and symbol embeddings
+  end
+  
+  # Graph traversal: find call graph
+  def execute({:call_graph, function_name, depth}, opts) do
+    # BFS/DFS through symbol_refs
+  end
+end
+```
+
+### 2.5.6 High-Level API
+
+```elixir
+defmodule Mosaic.Code do
+  @moduledoc "High-level code intelligence API"
+  
+  alias Mosaic.Extensions.AST.Query
+  
+  # Search
+  def search(query_string, opts \\ [])
+  def search_functions(pattern, opts \\ [])
+  def search_classes(pattern, opts \\ [])
+  def search_semantic(description, opts \\ [])
+  
+  # Navigation
+  def goto_definition(file, line, col)
+  def find_references(symbol)
+  def find_implementations(interface)
+  def find_callers(function)
+  def find_callees(function)
+  
+  # Analysis
+  def call_graph(entry_point, depth \\ 3)
+  def dependency_graph(file_or_module)
+  def dead_code()
+  def unused_exports()
+  
+  # Refactoring helpers
+  def rename_symbol(old_name, new_name, opts \\ [])
+  def find_and_replace_pattern(pattern, replacement, opts \\ [])
+  
+  # Example usage
+  def examples do
+    # Find all GenServer handle_call implementations
+    search_functions(~r/^handle_call$/, kind: :function, in_module: ~r/GenServer/)
+    
+    # Find functions that call Repo.transaction
+    find_callers("MyApp.Repo.transaction")
+    
+    # Semantic search
+    search_semantic("functions that validate user input")
+    
+    # Structural pattern
+    search({:structural, "def handle_info(:[msg], :[state]) do :[_] end", :elixir})
+    
+    # Call graph from endpoint
+    call_graph("MyAppWeb.UserController.create", depth: 5)
+  end
+end
+```
+
+### 2.5.7 Query DSL (Optional - Sourcegraph-style)
+
+```elixir
+defmodule Mosaic.Code.DSL do
+  @moduledoc """
+  Sourcegraph-inspired query DSL
+  
+  Examples:
+    repo:myapp lang:elixir type:function handle_
+    file:controller.ex type:function -test
+    lang:python def.*async.*:
+    caller:Repo.insert type:function
+    similar:"validate user permissions"
+  """
+  
+  def parse(query_string) do
+    query_string
+    |> tokenize()
+    |> build_ast()
+    |> to_query()
+  end
+  
+  defp tokenize(string) do
+    # Split into filters and patterns
+    ~r/(\w+):("[^"]+"|[\S]+)|(\S+)/
+    |> Regex.scan(string)
+    |> Enum.map(&parse_token/1)
+  end
+  
+  defp build_ast(tokens) do
+    # Build query AST from tokens
+  end
+  
+  defp to_query(ast) do
+    # Convert to Mosaic.Code.Query format
+  end
+end
+```
+
+### 2.5.8 REST/GraphQL API Endpoints
+
+```elixir
+# In Mosaic.API
+
+post "/api/code/search" do
+  # Body: {"query": "lang:elixir type:function handle_*", "limit": 50}
+  case Mosaic.Code.DSL.parse(query) do
+    {:ok, parsed} -> 
+      results = Mosaic.Code.search(parsed, limit: limit)
+      json(conn, %{results: results})
+    {:error, reason} ->
+      json(conn, 400, %{error: reason})
+  end
+end
+
+post "/api/code/definition" do
+  # Body: {"file": "lib/myapp/user.ex", "line": 42, "col": 10}
+  case Mosaic.Code.goto_definition(file, line, col) do
+    {:ok, definition} -> json(conn, definition)
+    {:error, :not_found} -> json(conn, 404, %{error: "Definition not found"})
+  end
+end
+
+post "/api/code/references" do
+  # Body: {"symbol": "MyApp.User.validate"}
+  references = Mosaic.Code.find_references(symbol)
+  json(conn, %{references: references})
+end
+
+post "/api/code/call-graph" do
+  # Body: {"entry": "MyApp.Worker.run", "depth": 3}
+  graph = Mosaic.Code.call_graph(entry, depth)
+  json(conn, graph)
+end
+
+get "/api/code/symbols/:file_id" do
+  # Get all symbols in a file
+  symbols = Mosaic.Code.symbols_in_file(file_id)
+  json(conn, %{symbols: symbols})
+end
+```
+
+---
+
+## Updated Timeline
+
+```
+Month 1              Month 2              Month 3              Month 4              Month 5
+├────────────────────┼────────────────────┼────────────────────┼────────────────────┼────────────────────┤
+│ Phase 1            │ Phase 1.5          │ Phase 2.5          │ Phase 3            │ Phase 5            │
+│ Graph Layer        │ Extension System   │ AST Extension      │ Clustering         │ FUSE VFS           │
+│                    │ + Phase 2          │                    │ + Phase 4          │                    │
+│                    │ RBAC Engine        │                    │ Object Storage     │                    │
+└────────────────────┴────────────────────┴────────────────────┴────────────────────┴────────────────────┘
+```
+
+---
+
+## Extension Ideas (Future)
+
+| Extension | Description |
+|-----------|-------------|
+| **AST** | Structural code search (this phase) |
+| **Image** | CLIP embeddings, OCR, object detection |
+| **PDF** | Text extraction, table extraction, embeddings |
+| **Audio** | Whisper transcription, speaker diarization |
+| **Video** | Frame extraction, scene detection |
+| **Markdown** | Link graph, header hierarchy |
+| **Git** | Commit history, blame, diff analysis |
+| **Notebook** | Jupyter/Livebook cell extraction |
+| **API Spec** | OpenAPI/GraphQL schema indexing |
+| **Database** | Schema introspection, query analysis |
+
+---
+
+## Dependencies for AST Extension
+
+```elixir
+# mix.exs
+defp deps do
+  [
+    # Tree-sitter NIF bindings
+    {:tree_sitter, "~> 0.1"},  # or custom Rustler NIF
+    
+    # Alternative: use external tree-sitter CLI
+    {:rambo, "~> 0.3"},  # for CLI execution
+    
+    # Pattern matching
+    {:nimble_parsec, "~> 1.0"},  # for query DSL parsing
+    
+    # Existing deps...
+  ]
+end
+```
+
+---
+
+## Immediate Next Steps
+
+1. **Extension behaviour** definition and manager
+2. **Tree-sitter Rustler NIF** or CLI wrapper
+3. **AST schema** migration
+4. **Basic symbol extraction** for Elixir first
+5. **Query engine** for pattern + semantic search
+
+Want me to start implementing the Extension system and AST parser?

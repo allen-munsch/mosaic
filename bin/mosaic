@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# ── MosaicDB CLI — Universal Code & Document Ingestor ────────────
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+[ -z "${MOSAIC_DEBUG:-}" ] && export MOSAIC_QUIET=1
+
+RUNNER="mix"
+EVAL_CMD="run -e"
+
+cmd="${1:-help}"
+shift 2>/dev/null || true
+
+quiet_filter() { grep -v "warning:\|info]\|debug]\|Compil\|All config\|index_strategy\|QueryEngine\|Discover" 2>/dev/null || true; }
+
+case "$cmd" in
+  # ── Code Ingestion ──────────────────────────────────────────
+  ingest)
+    path="${1:-.}"; echo "Indexing $path..."
+    $RUNNER $EVAL_CMD 'Application.ensure_all_started(:mosaic); Mosaic.ShardAutoDiscover.discover(); path=System.argv()|>hd(); alias=Mosaic.AST.BuiltinParser; alias2=Mosaic.Graph.Writer; shard=Path.join(Mosaic.Config.get(:storage_path),"ingest_#{System.os_time(:millisecond)}.db"); Mosaic.StorageManager.create_shard(shard); files=if File.dir?(path),do: Path.wildcard(path<>"/**/*.{ex,exs}"),else: [path]; {n,e}=Enum.reduce(files,{0,0},fn f,{tn,te}->case File.read(f)do {:ok,src}->{ns,es}=alias.extract_elixir(src,f); unless Enum.empty?(ns)do {:ok,s}=alias2.write_subgraph(shard,ns,es); {tn+s.nodes_written,te+s.edges_written} else {tn,te} end; _->{tn,te} end end); Mosaic.ShardRouter.register_shard(%{id:"ingest",path: shard,centroids: %{document: List.duplicate(0.0,384)},doc_count: n,bloom_filter: nil}); IO.puts("Done. #{n} nodes, #{e} edges")' "$(realpath "$path")" 2>&1 | quiet_filter
+    ;;
+
+  # ── Document Ingestion (PDF, DOCX, MD, TXT, HTML) ───────────
+  docs)
+    path="${1:-.}"; echo "Ingesting documents from $path..."
+    $RUNNER $EVAL_CMD 'Application.ensure_all_started(:mosaic); Mosaic.ShardAutoDiscover.discover(); path=System.argv()|>hd(); case Mosaic.Document.Ingestor.ingest_directory(path,embed: false)do {:ok,s}->IO.puts("Files: #{s.files} Chunks: #{s.chunks} Errors: #{s.errors}"); {:error,r}->IO.puts("Error: #{inspect(r)}") end' "$(realpath "$path")" 2>&1 | quiet_filter
+    ;;
+
+  # ── RAG Retrieval ───────────────────────────────────────────
+  rag)
+    query="${1:-}"; [ -z "$query" ] && { echo "Usage: mosaic rag <query>"; exit 1; }
+    $RUNNER $EVAL_CMD 'Application.ensure_all_started(:mosaic); Mosaic.ShardAutoDiscover.discover(); q=System.argv()|>hd(); case Mosaic.RAG.Pipeline.retrieve(q,top_k: 5)do {:ok,r}->if r.chunks==[]do IO.puts("No matching chunks. Ingest docs first: mosaic docs <path>") else IO.puts("Found #{length(r.chunks)} chunks (~#{r.token_count} tokens):"); Enum.each(r.chunks,fn c->IO.puts("  [#{c.similarity}] #{String.slice(c.name||"",0,100)}"); IO.puts("  Source: #{c.file_path}"); IO.puts("") end) end; {:error,r}->IO.puts("Error: #{inspect(r)}") end' "$query" 2>&1 | quiet_filter
+    ;;
+
+  # ── Reify ──────────────────────────────────────────────────
+  reify)
+    input="${1:-}"; framework="${2:-react}"
+    [ -z "$input" ] && { echo "Usage: mosaic reify <sexpr|file> [react|vue|html]"; exit 1; }
+    $RUNNER run scripts/reify_cmd.exs "$input" "$framework" 2>&1 | quiet_filter
+    ;;
+
+  # ── Search ──────────────────────────────────────────────────
+  search)
+    query="${1:-}"; [ -z "$query" ] && { echo "Usage: mosaic search <query>"; exit 1; }
+    $RUNNER $EVAL_CMD 'Application.ensure_all_started(:mosaic); Mosaic.ShardAutoDiscover.discover(); q=System.argv()|>hd(); words=String.split(q," "); clauses=Enum.map_join(words," OR ",fn _->"name LIKE ?"end); params=Enum.map(words,&"%#{&1}%"); r=Mosaic.FederatedQuery.execute("SELECT name,type,file_path,start_line FROM nodes WHERE #{clauses} LIMIT 10",params); Enum.each(r,fn [name,type,file,line]->IO.puts("  [#{type}] #{name} — #{file}:#{line}")end)' "$query" 2>&1 | quiet_filter
+    ;;
+
+  # ── Traverse ────────────────────────────────────────────────
+  traverse)
+    node="${1:-}"; rel="${2:-callers}"; [ -z "$node" ] && { echo "Usage: mosaic traverse <node> [callers|callees|neighborhood]"; exit 1; }
+    $RUNNER $EVAL_CMD 'Application.ensure_all_started(:mosaic); Mosaic.ShardAutoDiscover.discover(); [n,r]=System.argv(); r2=case r do"callers"->Mosaic.Graph.Traversal.callers(n,depth: 2); "callees"->Mosaic.Graph.Traversal.callees(n,depth: 2); "neighborhood"->Mosaic.Graph.Traversal.neighborhood(n,1); _->Mosaic.Graph.Traversal.callers(n,depth: 1)end; case r2 do{:ok,rows}when is_list(rows)->Enum.each(rows,fn [d,_,name,type,file,line|_]->IO.puts("  [#{d}] #{name} (#{type}) — #{file}:#{line}")end); {:ok,%{nodes: ns}}->IO.puts("  #{length(ns)} nodes"); Enum.each(Enum.take(ns,10),fn n->IO.puts("    #{n.name}")end); _->IO.puts("  no results")end' "$node" "$rel" 2>&1 | quiet_filter
+    ;;
+
+  # ── Report ──────────────────────────────────────────────────
+  report)
+    $RUNNER $EVAL_CMD 'Application.ensure_all_started(:mosaic); Mosaic.ShardAutoDiscover.discover(); {:ok,nc}=Mosaic.Graph.Traversal.node_counts(); {:ok,ec}=Mosaic.Graph.Traversal.edge_counts(); tn=nc|>Enum.map(fn [_,c]->c end)|>Enum.sum(); te=ec|>Enum.map(fn [_,c]->c end)|>Enum.sum(); IO.puts("Nodes: #{tn} Edges: #{te}"); Enum.each(nc,fn [t,c]->IO.puts("  #{t}: #{c}")end); IO.puts(""); {:ok,g}=Mosaic.Graph.Traversal.god_nodes(5); IO.puts("God nodes:"); Enum.each(g,fn n->IO.puts("  #{n.name} (#{n.type}) — degree #{n.degree}")end)' 2>&1 | quiet_filter
+    ;;
+
+  # ── Status ──────────────────────────────────────────────────
+  status)
+    find /tmp/mosaic/shards -name "*.db" 2>/dev/null | while read f; do echo "  $(basename $f) — $(du -h "$f" | cut -f1)"; done
+    ;;
+
+  # ── Servers ─────────────────────────────────────────────────
+  dev) echo "Starting dev server with hot reload..."; $RUNNER run -e 'Mix.Tasks.Mosaic.Dev.run(System.argv())' "${@}" 2>/dev/null ;;
+  mcp) echo "Starting MCP server..."; $RUNNER eval 'Mix.Tasks.Mosaic.Mcp.run([])' 2>/dev/null ;;
+  server) echo "Starting HTTP server on :4040..."; $RUNNER run --no-halt 2>/dev/null ;;
+  demo) $RUNNER run scripts/demo.exs 2>&1 | quiet_filter ;;
+
+  # ── Help ────────────────────────────────────────────────────
+  help|--help|-h)
+    echo "MosaicDB — Federated Semantic Code & Document Ingestor"
+    echo ""
+    echo "Code Ingestion:"
+    echo "  mosaic ingest <path>      Parse & index a codebase"
+    echo ""
+    echo "Document Ingestion (RAG):"
+    echo "  mosaic docs <path>        Chunk & index PDFs, DOCX, MD, TXT, HTML"
+    echo "  mosaic rag <query>        RAG retrieval across indexed docs"
+    echo "  mosaic rag-hybrid <query> Hybrid vector + keyword retrieval"
+    echo ""
+    echo "Query & Analysis:"
+    echo "  mosaic search <query>     Search indexed code/docs"
+    echo "  mosaic traverse <node> <r> Navigate code graph"
+    echo "  mosaic report             Graph analysis report"
+    echo ""
+    echo "Servers:"
+    echo "  mosaic server             HTTP API on :4040 + MCP on /mcp"
+    echo "  mosaic mcp                MCP stdio (for Matryoshka/agents)"
+    echo ""
+    echo "Other:"
+    echo "  mosaic status             Show shard storage"
+    echo "  mosaic reify <sexpr> <fw> Transpile S-expr to React/Vue/HTML"
+    echo ""
+    echo "Examples:"
+    echo "  mosaic ingest ~/projects/myapp"
+    echo "  mosaic docs ~/kb/articles/"
+    echo "  mosaic rag 'What is the authentication flow?'"
+    echo "  mosaic traverse MyModule.my_func callees"
+    ;;
+
+  *) echo "Unknown: $cmd. Try: mosaic help"; exit 1 ;;
+esac

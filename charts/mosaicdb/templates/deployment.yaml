@@ -1,0 +1,145 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mosaicdb.fullname" . }}
+  labels: {{ include "mosaicdb.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: {{ include "mosaicdb.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels: {{ include "mosaicdb.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "mosaicdb.serviceAccountName" . }}
+      securityContext: {{ toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: mosaicdb
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.port }}
+              name: http
+          env:
+            - name: HOME
+              value: "/var/lib/mosaic"
+            - name: XDG_CACHE_HOME
+              value: "/var/lib/mosaic/.cache"
+            - name: PORT
+              value: {{ .Values.service.port | quote }}
+            - name: MOSAIC_QUIET
+              value: "1"
+            - name: STORAGE_PATH
+              value: {{ .Values.config.storagePath | quote }}
+            - name: ROUTING_DB_PATH
+              value: {{ .Values.config.routingDbPath | quote }}
+            - name: INDEX_STRATEGY
+              value: {{ .Values.config.indexStrategy | quote }}
+            - name: CACHE_BACKEND
+              value: {{ .Values.config.cacheBackend | quote }}
+            - name: MIN_SIMILARITY
+              value: {{ .Values.config.minSimilarity | quote }}
+            - name: QUERY_TIMEOUT
+              value: {{ .Values.config.queryTimeout | quote }}
+            - name: DEFAULT_RESULT_LIMIT
+              value: {{ .Values.config.defaultResultLimit | quote }}
+            - name: GRAPH_ENABLED
+              value: {{ .Values.config.graphEnabled | quote }}
+            - name: HANDLE_REGISTRY_ENABLED
+              value: {{ .Values.config.handleRegistryEnabled | quote }}
+            - name: EMBEDDING_DIM
+              value: {{ .Values.config.embeddingDim | quote }}
+            - name: EMBEDDING_MODEL
+              value: {{ .Values.config.embeddingModel | quote }}
+            - name: EMBEDDING_PROVIDER
+              value: {{ .Values.config.embeddingProvider | quote }}
+            {{- if .Values.mcp.enabled }}
+            - name: MCP_ENABLED
+              value: "true"
+            {{- end }}
+            {{- if .Values.redis.enabled }}
+            - name: REDIS_URL
+              value: {{ .Values.redis.url | quote }}
+            {{- end }}
+            {{- if .Values.cluster.enabled }}
+            - name: CLUSTER_ENABLED
+              value: "true"
+            - name: CLUSTER_SECRET
+              value: {{ .Values.cluster.secret | quote }}
+            {{- end }}
+            {{- if .Values.remoteStorage.enabled }}
+            - name: STORAGE_BACKEND
+              value: {{ .Values.remoteStorage.backend | quote }}
+            - name: S3_BUCKET
+              value: {{ .Values.remoteStorage.bucket | quote }}
+            - name: S3_ENDPOINT
+              value: {{ .Values.remoteStorage.endpoint | quote }}
+            - name: S3_ACCESS_KEY
+              value: {{ .Values.remoteStorage.accessKey | quote }}
+            - name: S3_SECRET_KEY
+              value: {{ .Values.remoteStorage.secretKey | quote }}
+            - name: S3_REGION
+              value: {{ .Values.remoteStorage.region | quote }}
+            {{- if .Values.remoteStorage.syncEnabled }}
+            - name: SHARD_SYNC_ENABLED
+              value: "true"
+            - name: SHARD_SYNC_INTERVAL_MS
+              value: {{ .Values.remoteStorage.syncIntervalMs | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.auth.enabled }}
+            - name: AUTH_ENABLED
+              value: "true"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mosaicdb.fullname" . }}-auth
+                  key: jwt-secret
+            - name: API_KEY_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mosaicdb.fullname" . }}-auth
+                  key: api-key-encryption-key
+            {{- end }}
+            {{- range .Values.extraEnv }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources: {{ toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: false
+          volumeMounts:
+            - mountPath: {{ .Values.config.storagePath }}
+              name: shards
+            - mountPath: {{ .Values.config.routingDbPath | dir }}
+              name: config
+      volumes:
+        - name: shards
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "mosaicdb.fullname" . }}-shards
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: config
+          emptyDir: {}

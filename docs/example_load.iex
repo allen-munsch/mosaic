@@ -1,0 +1,36 @@
+# EXLA_CPU_ONLY=true iex -S mix
+# 1. Create a shard
+shard_path = "/tmp/mosaic/shards/test_shard_001.db"
+{:ok, ^shard_path} = Mosaic.StorageManager.create_shard(shard_path)
+
+# 2. Add documents with embeddings
+{:ok, conn} = Exqlite.Sqlite3.open(shard_path)
+
+docs = [
+  {"doc1", "Elixir is a functional programming language", %{}},
+  {"doc2", "Phoenix is a web framework for Elixir", %{}},
+  {"doc3", "SQLite is an embedded database", %{}}
+]
+
+embeddings = Mosaic.EmbeddingService.encode_batch(Enum.map(docs, &elem(&1, 1)))
+
+Enum.zip(docs, embeddings) |> Enum.each(fn {{id, text, meta}, emb} ->
+  Mosaic.DB.execute(conn, "INSERT INTO documents (id, text, metadata) VALUES (?, ?, ?)", [id, text, Jason.encode!(meta)])
+  emb_blob = :erlang.term_to_binary(emb)
+  Mosaic.DB.execute(conn, "INSERT INTO vss_vectors (rowid, vec) VALUES ((SELECT rowid FROM documents WHERE id = ?), ?)", [id, emb_blob])
+end)
+
+# 3. Compute centroid and register with router
+centroid = embeddings |> Enum.zip() |> Enum.map(fn tuple -> Tuple.to_list(tuple) |> Enum.sum() |> Kernel./(length(embeddings)) end)
+bloom = Mosaic.BloomFilterManager.create_bloom_filter(docs |> Enum.flat_map(fn {_, text, _} -> String.split(text) end))
+
+GenServer.cast(Mosaic.ShardRouter, {:register_shard, %{
+  id: "test_shard_001",
+  path: shard_path,
+  centroid: centroid,
+  doc_count: length(docs),
+  bloom_filter: bloom
+}})
+
+Exqlite.Sqlite3.close(conn)
+IO.puts("Indexed #{length(docs)} documents")

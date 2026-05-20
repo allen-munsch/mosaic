@@ -1,0 +1,67 @@
+# Use an official NVIDIA CUDA runtime image as base
+FROM docker.io/nvidia/cuda:12.3.2-devel-ubuntu22.04
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install common dependencies needed for Elixir/Erlang and build tools
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    build-essential \
+    git \
+    curl \
+    libcudnn9-cuda-12 \
+    libcudnn9-dev-cuda-12 \
+    sqlite3 \
+    libsqlite3-dev \
+    ca-certificates \
+    libssl-dev \
+    libncurses5-dev \
+    libwxgtk3.0-gtk3-dev \
+    libgl1-mesa-dev \
+    libglu1-mesa-dev \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install asdf-vm
+RUN git clone https://github.com/asdf-vm/asdf.git ~/.asdf --branch v0.14.0
+ENV PATH="/root/.asdf/bin:/root/.asdf/shims:$PATH"
+
+# Install Erlang and Elixir plugins for asdf
+RUN asdf plugin add erlang || true
+RUN asdf plugin add elixir || true
+
+# Set Erlang and Elixir versions
+ENV ERLANG_VERSION="28.2"
+ENV ELIXIR_VERSION="1.19.3"
+
+RUN asdf install erlang ${ERLANG_VERSION}
+RUN asdf global erlang ${ERLANG_VERSION}
+RUN asdf install elixir ${ELIXIR_VERSION}
+RUN asdf global elixir ${ELIXIR_VERSION}
+
+# Install Rust toolchain for Rustler NIFs
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    && export PATH="/root/.cargo/bin:$PATH" \
+    && echo "source $HOME/.cargo/env" >> ~/.bashrc
+ENV PATH="/root/.cargo/bin:$PATH"
+ENV XLA_TARGET=cuda12
+ENV PATH="/usr/local/cuda/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/cuda-12.3/targets/x86_64-linux/lib:${LD_LIBRARY_PATH}"
+ENV MIX_ENV=dev
+
+WORKDIR /app
+COPY . /app
+
+# Ensure start_app.sh is executable
+COPY start_app.sh /app/start_app.sh
+RUN chmod +x /app/start_app.sh
+
+# Install Elixir dependencies and compile the project
+RUN mix deps.get && \
+    mix deps.compile
+
+# Expose the port your application runs on
+EXPOSE 4040
+
+# Define the command to run your application
+CMD ["bash", "-c", "MIX_ENV=dev elixir --sname mosaic_app@mosaic --cookie supersecretcookie --erl '-pa /app/_build/dev/lib' -S mix run --no-halt"]

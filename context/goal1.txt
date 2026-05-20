@@ -1,0 +1,266 @@
+## Scaling Strategy Overview
+
+```
+                        ┌─────────────────────────────────────┐
+                        │           Load Balancer             │
+                        │    (Nginx / HAProxy / Cloud LB)     │
+                        └──────────────┬──────────────────────┘
+                                       │
+              ┌────────────────────────┼────────────────────────┐
+              ▼                        ▼                        ▼
+       ┌─────────────┐          ┌─────────────┐          ┌─────────────┐
+       │ Coordinator │          │ Coordinator │          │ Coordinator │
+       │   Node 1    │          │   Node 2    │          │   Node 3    │
+       └──────┬──────┘          └──────┬──────┘          └──────┬──────┘
+              │                        │                        │
+              └────────────────────────┼────────────────────────┘
+                                       │
+                        ┌──────────────┴──────────────┐
+                        ▼                             ▼
+                 ┌─────────────┐               ┌─────────────┐
+                 │ Redis Cluster│              │ Shard Router │
+                 │  (Cache)     │              │  (Consistent │
+                 └─────────────┘               │   Hashing)   │
+                                               └──────┬───────┘
+                                                      │
+              ┌───────────────┬───────────────┬───────┴───────┬───────────────┐
+              ▼               ▼               ▼               ▼               ▼
+        ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
+        │ Worker 1 │   │ Worker 2 │   │ Worker 3 │   │ Worker 4 │   │ Worker 5 │
+        │ Shards   │   │ Shards   │   │ Shards   │   │ Shards   │   │ Shards   │
+        │ [0-99]   │   │[100-199] │   │[200-299] │   │[300-399] │   │[400-499] │
+        └──────────┘   └──────────┘   └──────────┘   └──────────┘   └──────────┘
+```
+
+---
+
+## 1. Coordinator Layer (Stateless)
+
+**Easiest win** — coordinators are stateless, so just add more:
+
+```yaml
+# docker-compose.yml
+coordinator:
+  image: mosaic:latest
+  deploy:
+    replicas: 3
+  environment:
+    - REDIS_URL=redis://redis-cluster:6379
+```
+
+**Key considerations:**
+- Round-robin or least-connections load balancing via Nginx
+- Shared Redis for cache coherence
+- No sticky sessions needed
+
+---
+
+## 2. Shard Layer (The Hard Part)
+
+### Option A: Partition by Hash Range (Recommended)
+
+```elixir
+# lib/mosaic/shard_router.ex
+defmodule Mosaic.ShardRouter do
+  @hash_ring :hash_ring  # consistent hashing
+
+  def route_document(doc_id) do
+    hash = :erlang.phash2(doc_id, 1024)
+    get_worker_for_hash(hash)
+  end
+
+  def route_query(query) do
+    # Fan-out to ALL workers, merge results
+    list_all_workers()
+  end
+end
+```
+
+**Shard distribution:**
+| Worker | Hash Range | Shards |
+|--------|------------|--------|
+| worker-1 | 0-255 | shard_000.db - shard_099.db |
+| worker-2 | 256-511 | shard_100.db - shard_199.db |
+| worker-3 | 512-767 | shard_200.db - shard_299.db |
+| worker-4 | 768-1023 | shard_300.db - shard_399.db |
+
+### Option B: Replicated Shards (High Availability)
+
+Each shard replicated to N workers:
+
+```elixir
+# Replication factor of 2
+shard_001.db → [worker-1, worker-3]
+shard_002.db → [worker-2, worker-4]
+shard_003.db → [worker-1, worker-4]
+```
+
+**Benefits:** Fault tolerance, read scaling
+**Cost:** Storage overhead, sync complexity
+
+---
+
+## 3. Cache Layer (Redis)
+
+### Redis Cluster for Scale
+
+```yaml
+# docker-compose.yml
+redis:
+  image: redis:7-alpine
+  command: redis-server --cluster-enabled yes
+  deploy:
+    replicas: 6  # 3 masters + 3 replicas
+```
+
+### Cache Strategy
+
+```elixir
+defmodule Mosaic.Cache do
+  # Cache key = hash(query_embedding)
+  # TTL based on query frequency
+
+  def cache_key(query) do
+    :crypto.hash(:sha256, query) |> Base.encode16()
+  end
+
+  # Two-tier: local ETS + Redis
+  def get(key) do
+    case ETS.lookup(:local_cache, key) do
+      [{^key, value}] -> {:ok, value}
+      [] -> Redis.get(key)
+    end
+  end
+end
+```
+
+---
+
+## 4. Query Fan-out Strategy
+
+### Scatter-Gather Pattern
+
+```elixir
+defmodule Mosaic.QueryEngine do
+  def search(query, opts \\ []) do
+    workers = ShardRouter.list_all_workers()
+    timeout = opts[:timeout] || 5_000
+
+    # Parallel fan-out
+    tasks = Enum.map(workers, fn worker ->
+      Task.async(fn -> query_worker(worker, query) end)
+    end)
+
+    # Gather with timeout (don't wait for slow nodes)
+    results = Task.yield_many(tasks, timeout)
+    |> Enum.flat_map(fn
+      {_task, {:ok, hits}} -> hits
+      {task, nil} ->
+        Task.shutdown(task, :brutal_kill)
+        []  # Skip slow/failed workers
+    end)
+
+    # Merge and re-rank
+    merge_and_rank(results)
+  end
+end
+```
+
+---
+
+## 5. Service Discovery
+
+### Option A: Static Config (Simple)
+
+```elixir
+# config/runtime.exs
+config :mosaic, :workers, [
+  "worker-1:4041",
+  "worker-2:4041",
+  "worker-3:4041"
+]
+```
+
+### Option B: Consul/etcd (Dynamic)
+
+```elixir
+defmodule Mosaic.Discovery do
+  use GenServer
+
+  def init(_) do
+    :timer.send_interval(5_000, :refresh)
+    {:ok, fetch_workers()}
+  end
+
+  def handle_info(:refresh, _state) do
+    {:noreply, fetch_workers()}
+  end
+
+  defp fetch_workers do
+    Consul.Health.service("mosaic-worker")
+    |> Enum.map(& &1.address)
+  end
+end
+```
+
+### Option C: Erlang Clustering (Native)
+
+```elixir
+# Use libcluster for automatic node discovery
+config :libcluster,
+  topologies: [
+    k8s: [
+      strategy: Cluster.Strategy.Kubernetes,
+      config: [kubernetes_selector: "app=mosaic"]
+    ]
+  ]
+```
+
+---
+
+## 6. Recommended Implementation Order
+
+| Phase | What | Complexity | Impact |
+|-------|------|------------|--------|
+| 1 | Add coordinator replicas behind Nginx | Low | High |
+| 2 | Redis Cluster | Medium | Medium |
+| 3 | Shard partitioning across workers | Medium | High |
+| 4 | Scatter-gather with timeouts | Medium | High |
+| 5 | Service discovery (libcluster) | Medium | Medium |
+| 6 | Shard replication | High | High |
+
+---
+
+## 7. Quick Win: Docker Compose Scaling
+
+```yaml
+# docker-compose.yml
+services:
+  coordinator:
+    build: .
+    deploy:
+      replicas: 3
+    environment:
+      - WORKER_URLS=worker-1:4041,worker-2:4041
+
+  worker:
+    build: .
+    command: mix run --no-halt -- --mode=worker
+    deploy:
+      replicas: 4
+    volumes:
+      - shard-data:/data/shards
+
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    ports:
+      - "80:80"
+```
+
+```bash
+# Scale up
+docker-compose up -d --scale coordinator=5 --scale worker=8
+```
+

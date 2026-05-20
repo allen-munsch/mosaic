@@ -1,0 +1,64 @@
+defmodule Mix.Tasks.Mosaic.Mcp do
+  @moduledoc """
+  Start MosaicDB as an MCP (Model Context Protocol) stdio server.
+
+  Reads JSON-RPC requests from stdin, dispatches to mosaic_* tools,
+  and writes responses to stdout. Compatible with Claude Desktop,
+  Cursor, and any MCP-capable agent.
+
+  ## Usage
+
+      mix mosaic.mcp
+
+  ## MCP Client Configuration
+
+  ```json
+  {
+    "mcpServers": {
+      "mosaic": {
+        "command": "mix",
+        "args": ["mosaic.mcp"],
+        "cwd": "/path/to/mosaic"
+      }
+    }
+  }
+  ```
+
+  Or with a release:
+
+  ```json
+  {
+    "mcpServers": {
+      "mosaic": {
+        "command": "/path/to/mosaic/bin/mosaic",
+        "args": ["mcp"]
+      }
+    }
+  }
+  ```
+  """
+
+  use Mix.Task
+
+  @shortdoc "Start MosaicDB as an MCP stdio server"
+
+  def run(_args) do
+    # Priority: env var → app config → defaults
+    # MOSAIC_QUIET suppresses startup and debug noise
+    if System.get_env("MOSAIC_QUIET") == "1" do
+      Application.put_env(:mosaic, :startup_quiet, true)
+    end
+
+    # MCP requires stdout for JSON-RPC only; Logger output is acceptable
+    # as stderr, which is the default.
+
+    # Suppress inspect noise from startup
+    Application.put_env(:mosaic, :startup_quiet, true)
+
+    # Start the full application with MCP server
+    {:ok, _apps} = Application.ensure_all_started(:mosaic)
+
+    # Keep the process alive — the MCP server reads stdin in a Task
+    Process.sleep(:infinity)
+  end
+end

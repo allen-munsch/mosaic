@@ -1,0 +1,218 @@
+# ── MosaicDB Docker Compose ──────────────────────────────────────
+# Single-node deployment with optional Redis, monitoring, and nginx.
+# For Kubernetes, use charts/mosaicdb (Helm chart).
+#
+# Quick start:
+#   docker compose up -d
+#
+# With auth enabled:
+#   JWT_SECRET=$(openssl rand -base64 32) docker compose up -d
+#
+# With Redis caching:
+#   docker compose --profile redis up -d
+#
+# With monitoring (Prometheus + Grafana):
+#   docker compose --profile monitoring up -d
+#
+# All services:
+#   docker compose --profile all up -d
+# ────────────────────────────────────────────────────────────────
+
+services:
+  # ── MosaicDB ──────────────────────────────────────────────
+  mosaic:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mosaicdb:latest
+    container_name: mosaicdb
+    hostname: mosaic
+    environment:
+      # ── Core ────────────────────────────────────────────
+      PORT: "4040"
+      MIX_ENV: prod
+      HOME: /var/lib/mosaic
+      XDG_CACHE_HOME: /var/lib/mosaic/.cache
+      MOSAIC_QUIET: "1"
+      # ── Storage ─────────────────────────────────────────
+      STORAGE_PATH: /var/lib/mosaic/shards
+      ROUTING_DB_PATH: /var/lib/mosaic/config/index.db
+      # ── Search & indexing ───────────────────────────────
+      INDEX_STRATEGY: hnsw
+      CACHE_BACKEND: ets
+      MIN_SIMILARITY: "0.1"
+      QUERY_TIMEOUT: "10000"
+      DEFAULT_RESULT_LIMIT: "20"
+      # ── Features ────────────────────────────────────────
+      GRAPH_ENABLED: "true"
+      HANDLE_REGISTRY_ENABLED: "true"
+      MCP_ENABLED: "${MCP_ENABLED:-false}"
+      CLUSTER_ENABLED: "${CLUSTER_ENABLED:-false}"
+      CLUSTER_SECRET: "${CLUSTER_SECRET:-mosaic-cluster-secret}"
+      # ── Embeddings ──────────────────────────────────────
+      EMBEDDING_DIM: "384"
+      EMBEDDING_MODEL: local
+      EMBEDDING_PROVIDER: bumblebee
+      EMBEDDING_MODEL_NAME: "${EMBEDDING_MODEL_NAME:-all-MiniLM-L6-v2}"
+      # ── Auth ─────────────────────────────────────────────
+      AUTH_ENABLED: "${AUTH_ENABLED:-false}"
+      JWT_SECRET: "${JWT_SECRET:-mosaic-dev-secret-change-in-production}"
+      # ── Redis (set REDIS_URL when using redis profile) ──
+      REDIS_URL: "${REDIS_URL:-redis://redis:6379/1}"
+      # ── Remote storage backend (S3/MinIO) ──────────────
+      STORAGE_BACKEND: "${STORAGE_BACKEND:-local}"
+      S3_BUCKET: "${S3_BUCKET:-mosaic-shards}"
+      S3_ENDPOINT: "${S3_ENDPOINT:-http://s3:9000}"
+      S3_ACCESS_KEY: "${S3_ACCESS_KEY:-}"
+      S3_SECRET_KEY: "${S3_SECRET_KEY:-}"
+      S3_REGION: "${S3_REGION:-us-east-1}"
+      SHARD_SYNC_ENABLED: "${SHARD_SYNC_ENABLED:-false}"
+    ports:
+      - "4040:4040"
+    volumes:
+      - mosaic_shards:/var/lib/mosaic/shards
+      - mosaic_config:/var/lib/mosaic/config
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4040/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: '4'
+        reservations:
+          memory: 2G
+          cpus: '1'
+    networks:
+      - mosaic
+
+  # ── Redis (optional, distributed cache) ──────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: mosaic-redis
+    hostname: redis
+    profiles: ["redis", "all"]
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - mosaic
+
+  # ── Nginx (optional, API gateway) ────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: mosaic-nginx
+    hostname: nginx
+    profiles: ["nginx", "all"]
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      mosaic:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - mosaic
+
+  # ── Prometheus (optional, metrics) ───────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: mosaic-prometheus
+    profiles: ["monitoring", "all"]
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+    networks:
+      - mosaic
+
+  # ── Grafana (optional, dashboards) ───────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: mosaic-grafana
+    profiles: ["monitoring", "all"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - mosaic
+
+  # ── k6 Load Testing (optional) ───────────────────────────
+  k6:
+    image: grafana/k6:latest
+    container_name: mosaic-k6
+    profiles: ["load-test"]
+    working_dir: /app
+    volumes:
+      - ./k6_tests:/app
+    depends_on:
+      mosaic:
+        condition: service_healthy
+    networks:
+      - mosaic
+
+  # ── SeaweedFS (optional, S3-compatible storage) ─────────
+  # Apache 2.0 — actively maintained. Single-binary S3 API.
+  # Also works with: AWS S3, Cloudflare R2, Backblaze B2, Garage.
+  s3:
+    image: chrislusf/seaweedfs:latest
+    container_name: mosaic-s3
+    hostname: s3
+    profiles: ["s3", "all"]
+    command: server -s3 -dir /data -s3.port 9000
+    ports:
+      - "9000:9000"
+    volumes:
+      - s3_data:/data
+    restart: unless-stopped
+    networks:
+      - mosaic
+
+volumes:
+  mosaic_shards:
+    driver: local
+  mosaic_config:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  s3_data:
+    driver: local
+
+networks:
+  mosaic:
+    driver: bridge

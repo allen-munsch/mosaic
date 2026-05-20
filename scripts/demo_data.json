@@ -1,0 +1,121 @@
+{
+  "metadata": {
+    "name": "MosaicDB Demo Dataset",
+    "version": "1.0",
+    "description": "Comprehensive demo showcasing semantic search, hybrid queries, multi-level retrieval, and analytics"
+  },
+  
+  "datasets": {
+    "product_reviews": {
+      "description": "E-commerce product reviews with ratings and categories",
+      "documents": [
+        {"id": "prod_001", "text": "This wireless mechanical keyboard has incredible tactile feedback. Cherry MX Brown switches provide the perfect balance of typing feel and noise level. RGB backlighting is customizable through intuitive software.", "metadata": {"category": "electronics", "rating": 5, "price": 149.99, "brand": "KeyMaster"}},
+        {"id": "prod_002", "text": "Disappointed with battery life on this laptop. Barely lasts 4 hours under normal use. The display is gorgeous though - 4K OLED with vibrant colors and deep blacks. Performance is snappy with the M2 chip for development work.", "metadata": {"category": "electronics", "rating": 3, "price": 1299.99, "brand": "TechPro"}},
+        {"id": "prod_003", "text": "Best espresso machine for home use I've ever owned. Pulls shots comparable to cafe quality with proper crema. The steam wand takes practice but produces silky microfoam perfect for latte art.", "metadata": {"category": "appliances", "rating": 5, "price": 699.99, "brand": "BrewMaster"}},
+        {"id": "prod_004", "text": "Running shoes with excellent cushioning for long distances and marathon training. The carbon fiber plate gives noticeable energy return on each stride. Sizing runs small - order half size up.", "metadata": {"category": "sports", "rating": 4, "price": 249.99, "brand": "SpeedFlex"}},
+        {"id": "prod_005", "text": "Noise cancelling headphones that rival the industry best. ANC blocks airplane engine noise completely. Sound signature is warm with punchy bass and clear mids. Comfortable for all-day wear.", "metadata": {"category": "electronics", "rating": 5, "price": 379.99, "brand": "SoundElite"}}
+      ]
+    },
+    
+    "technical_docs": {
+      "description": "Software documentation and technical articles",
+      "documents": [
+        {"id": "doc_001", "text": "Vector databases store high-dimensional embeddings for similarity search. Unlike traditional databases that match exact values, vector DBs find semantically similar items using distance metrics like cosine similarity or euclidean distance. This enables powerful AI applications.", "metadata": {"category": "database", "topic": "vector-search", "difficulty": "intermediate"}},
+        {"id": "doc_002", "text": "Embeddings are dense numerical representations of text, images, or other data. Neural networks like transformers convert input into fixed-size vectors that capture semantic meaning. Similar concepts cluster together in embedding space.", "metadata": {"category": "ml", "topic": "embeddings", "difficulty": "beginner"}},
+        {"id": "doc_003", "text": "SQLite is a serverless, self-contained SQL database engine. It stores the entire database in a single file, making it perfect for embedded systems and local applications. Despite its simplicity, it handles concurrent reads efficiently.", "metadata": {"category": "database", "topic": "sqlite", "difficulty": "beginner"}},
+        {"id": "doc_004", "text": "Hybrid search combines vector similarity with traditional filters. First, candidate documents are retrieved using approximate nearest neighbor search. Then metadata filters narrow results. This balances semantic relevance with precise constraints.", "metadata": {"category": "database", "topic": "hybrid-search", "difficulty": "advanced"}},
+        {"id": "doc_005", "text": "Chunking strategies affect retrieval quality significantly. Document-level chunks capture broad context but may miss specific details. Sentence-level chunks are precise but lack surrounding context. Hierarchical chunking provides both.", "metadata": {"category": "rag", "topic": "chunking", "difficulty": "intermediate"}},
+        {"id": "doc_006", "text": "RAG (Retrieval Augmented Generation) enhances LLM responses with external knowledge. The retriever finds relevant documents from a corpus. These are injected into the prompt as context, grounding the model's output in factual information.", "metadata": {"category": "rag", "topic": "architecture", "difficulty": "intermediate"}}
+      ]
+    },
+    
+    "research_papers": {
+      "description": "Academic paper abstracts for multi-paragraph demos",
+      "documents": [
+        {"id": "paper_001", "text": "We present a novel approach to dense passage retrieval using contrastive learning. Our method trains dual encoders on large-scale question-answer pairs.\n\nThe query encoder and passage encoder share initial layers but diverge in final projections. This architecture captures both shared semantics and role-specific features.\n\nExperiments on MS MARCO and Natural Questions show 15% improvement over BM25 baselines. Latency remains under 10ms for 10M document collections with HNSW indexing.", "metadata": {"venue": "ACL 2024", "topic": "retrieval", "citations": 127}},
+        {"id": "paper_002", "text": "Attention mechanisms have revolutionized natural language processing. The transformer architecture replaces recurrence with self-attention, enabling parallel computation.\n\nWe analyze attention patterns across layers. Early layers capture syntactic relationships while deeper layers encode semantic dependencies. This emergent hierarchy requires no explicit supervision.\n\nOur visualization toolkit reveals how models process long-range dependencies. We release code and pretrained checkpoints for reproducibility.", "metadata": {"venue": "NeurIPS 2023", "topic": "transformers", "citations": 892}},
+        {"id": "paper_003", "text": "Large language models exhibit emergent capabilities at scale. Below certain parameter thresholds, models fail basic reasoning tasks. Above the threshold, performance jumps discontinuously.\n\nWe investigate this phase transition phenomenon across model families. Chain-of-thought prompting lowers the emergence threshold by 10x parameters. This suggests reasoning ability depends on both capacity and elicitation method.\n\nImplications for AI safety are discussed. Emergent capabilities may appear suddenly in future systems.", "metadata": {"venue": "ICML 2024", "topic": "emergent-behavior", "citations": 445}}
+      ]
+    },
+    
+    "recipes": {
+      "description": "Cooking recipes with ingredients and instructions",
+      "documents": [
+        {"id": "recipe_001", "text": "Classic Italian Carbonara: Cook 400g spaghetti until al dente. While pasta cooks, fry 200g guanciale until crispy. Whisk 4 egg yolks with 100g pecorino romano and black pepper. Toss hot pasta with guanciale, remove from heat, and quickly stir in egg mixture. The residual heat creates a creamy sauce without scrambling the eggs.", "metadata": {"cuisine": "italian", "difficulty": "medium", "time_minutes": 25, "vegetarian": false}},
+        {"id": "recipe_002", "text": "Thai Green Curry: Blend green curry paste with coconut cream until fragrant. Add chicken pieces and simmer until cooked through. Pour in remaining coconut milk, fish sauce, palm sugar, and thai basil. Add bamboo shoots and eggplant. Serve over jasmine rice with lime wedges.", "metadata": {"cuisine": "thai", "difficulty": "medium", "time_minutes": 35, "vegetarian": false}},
+        {"id": "recipe_003", "text": "Mediterranean Quinoa Bowl: Cook quinoa in vegetable broth for extra flavor. Roast chickpeas with cumin and paprika until crispy. Assemble bowls with quinoa base, cucumber, cherry tomatoes, kalamata olives, and feta cheese. Drizzle with lemon tahini dressing and fresh herbs.", "metadata": {"cuisine": "mediterranean", "difficulty": "easy", "time_minutes": 30, "vegetarian": true}},
+        {"id": "recipe_004", "text": "Japanese Miso Ramen: Prepare dashi stock with kombu and bonito flakes. Sauté garlic and ginger, then add white miso paste. Combine with dashi and simmer. Cook ramen noodles separately. Assemble with soft-boiled egg, chashu pork, nori, green onions, and sesame seeds.", "metadata": {"cuisine": "japanese", "difficulty": "hard", "time_minutes": 120, "vegetarian": false}}
+      ]
+    }
+  },
+  
+  "demo_scenarios": {
+    "semantic_search": {
+      "title": "Semantic Search - Understanding Intent",
+      "description": "Show how MosaicDB understands meaning, not just keywords",
+      "queries": [
+        {"query": "comfortable for long work sessions", "expected_match": "prod_001", "explanation": "Matches keyboard review - understands 'work sessions' relates to typing"},
+        {"query": "morning caffeine ritual", "expected_match": "prod_003", "explanation": "Matches espresso machine - understands coffee-related intent"},
+        {"query": "how do AI systems find similar content", "expected_match": "doc_001", "explanation": "Matches vector DB doc - semantic understanding of 'similar content'"},
+        {"query": "healthy vegetarian lunch ideas", "expected_match": "recipe_003", "explanation": "Matches quinoa bowl - understands dietary preferences"},
+        {"query": "neural network text understanding", "expected_match": "doc_002", "explanation": "Matches embeddings doc - relates neural nets to NLP"}
+      ]
+    },
+    
+    "hybrid_search": {
+      "title": "Hybrid Search - Semantic + Filters",
+      "description": "Combine semantic similarity with precise metadata constraints",
+      "queries": [
+        {"query": "premium quality worth the investment", "where": "json_extract(metadata, '$.category') = 'electronics'", "explanation": "Find high-value electronics"},
+        {"query": "beginner friendly explanation", "where": "json_extract(metadata, '$.difficulty') = 'beginner'", "explanation": "Easy technical content only"},
+        {"query": "quick healthy meal", "where": "json_extract(metadata, '$.time_minutes') <= 30 AND json_extract(metadata, '$.vegetarian') = true", "explanation": "Fast vegetarian recipes"},
+        {"query": "highly cited research", "where": "json_extract(metadata, '$.citations') > 400", "explanation": "Influential papers only"},
+        {"query": "asian cuisine comfort food", "where": "json_extract(metadata, '$.cuisine') IN ('thai', 'japanese')", "explanation": "Thai or Japanese dishes"}
+      ]
+    },
+    
+    "multi_level_retrieval": {
+      "title": "Multi-Level Retrieval - Hierarchical Chunking",
+      "description": "Retrieve at document, paragraph, or sentence level",
+      "queries": [
+        {"query": "transformer attention analysis", "level": "document", "explanation": "Full document context for broad understanding"},
+        {"query": "transformer attention analysis", "level": "paragraph", "explanation": "Focused paragraphs for specific details"},
+        {"query": "transformer attention analysis", "level": "sentence", "explanation": "Precise sentences for citations"}
+      ]
+    },
+    
+    "grounded_search": {
+      "title": "Grounded Search - Provenance Tracking",
+      "description": "Track exactly where information comes from",
+      "queries": [
+        {"query": "how to make creamy pasta sauce", "expand_context": true, "explanation": "Returns chunk with full document context and offsets"},
+        {"query": "emergent AI capabilities", "expand_context": true, "explanation": "Academic source with citation info"}
+      ]
+    },
+    
+    "analytics": {
+      "title": "Analytics - DuckDB Aggregations",
+      "description": "Complex SQL analytics across federated shards",
+      "queries": [
+        {"sql": "SELECT COUNT(*) as total_documents FROM documents", "explanation": "Total document count"},
+        {"sql": "SELECT json_extract(metadata, '$.category') as category, COUNT(*) as count, ROUND(AVG(CAST(json_extract(metadata, '$.rating') AS FLOAT)), 2) as avg_rating FROM documents WHERE json_extract(metadata, '$.rating') IS NOT NULL GROUP BY category ORDER BY avg_rating DESC", "explanation": "Category ratings breakdown"},
+        {"sql": "SELECT json_extract(metadata, '$.cuisine') as cuisine, ROUND(AVG(json_extract(metadata, '$.time_minutes')), 0) as avg_time FROM documents WHERE json_extract(metadata, '$.cuisine') IS NOT NULL GROUP BY cuisine", "explanation": "Average cooking time by cuisine"},
+        {"sql": "SELECT json_extract(metadata, '$.topic') as topic, COUNT(*) as docs FROM documents WHERE json_extract(metadata, '$.topic') IS NOT NULL GROUP BY topic ORDER BY docs DESC LIMIT 5", "explanation": "Top technical topics"},
+        {"sql": "SELECT json_extract(metadata, '$.difficulty') as level, COUNT(*) as count FROM documents WHERE json_extract(metadata, '$.difficulty') IS NOT NULL GROUP BY level", "explanation": "Content difficulty distribution"}
+      ]
+    }
+  },
+  
+  "performance_tests": {
+    "cold_vs_hot": {
+      "description": "Compare embedding generation vs cached search",
+      "iterations": 3,
+      "queries": ["wireless audio quality", "machine learning basics", "healthy dinner recipe"]
+    },
+    "throughput": {
+      "description": "Parallel query throughput test",
+      "parallel_queries": 20,
+      "queries": ["keyboard", "laptop", "coffee", "shoes", "headphones", "database", "embeddings", "search", "pasta", "curry", "attention", "retrieval", "cooking", "electronics", "research", "AI", "neural", "semantic", "vector", "hybrid"]
+    }
+  }
+}
