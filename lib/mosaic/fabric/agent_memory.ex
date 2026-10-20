@@ -22,7 +22,6 @@ defmodule Mosaic.Fabric.AgentMemory do
     Sandbox --executed--> Execution --produced--> Result
   """
 
-  require Logger
   alias Mosaic.{HandleRegistry, Graph}
 
   # ── Memory Write ──────────────────────────────────────────────
@@ -64,8 +63,9 @@ defmodule Mosaic.Fabric.AgentMemory do
     ensure_agent_node(agent_id)
 
     # Create memory node in graph
-    Graph.Writer.write_nodes([
+    Graph.Writer.write_subgraph(graph_shard(), [
       %{
+        id: memory_id,
         name: memory_id,
         type: "memory",
         source_text: String.slice(content, 0, 500),
@@ -76,19 +76,15 @@ defmodule Mosaic.Fabric.AgentMemory do
           created_at: now
         }
       }
-    ])
+    ], [])
 
-    # Create edges: agent --has--> memory
-    Graph.Writer.write_edges([
+    # Create edges: agent --has--> memory, plus links to other memories
+    Graph.Writer.write_subgraph(graph_shard(), [], [
       %{source: agent_id, target: memory_id, type: "has_memory", confidence: "EXTRACTED"}
+      | Enum.map(links_to, fn target_id ->
+          %{source: memory_id, target: target_id, type: "links_to", confidence: "INFERRED"}
+        end)
     ])
-
-    # Create links to other memories
-    Enum.each(links_to, fn target_id ->
-      Graph.Writer.write_edges([
-        %{source: memory_id, target: target_id, type: "links_to", confidence: "INFERRED"}
-      ])
-    end)
 
     {:ok, memory, stub}
   end
@@ -156,7 +152,7 @@ defmodule Mosaic.Fabric.AgentMemory do
     - "summarizes" — consolidation relationship
   """
   def link(source_id, target_id, relation_type \\ "links_to") do
-    Graph.Writer.write_edges([
+    Graph.Writer.write_subgraph(graph_shard(), [], [
       %{
         source: source_id,
         target: target_id,
@@ -236,13 +232,14 @@ defmodule Mosaic.Fabric.AgentMemory do
   Called automatically by fabric_sandbox_run, but can also be called
   manually to record external executions.
   """
-  def record_execution(agent_id, sandbox_id, cmd, result, opts \\ []) do
+  def record_execution(agent_id, sandbox_id, cmd, result, _opts \\ []) do
     exec_id = "exec_#{random_id()}"
     now = DateTime.utc_now() |> DateTime.to_iso8601()
 
     # Create execution node
-    Graph.Writer.write_nodes([
+    Graph.Writer.write_subgraph(graph_shard(), [
       %{
+        id: exec_id,
         name: exec_id,
         type: "execution",
         source_text: inspect(cmd),
@@ -255,14 +252,16 @@ defmodule Mosaic.Fabric.AgentMemory do
           created_at: now
         }
       }
-    ])
+    ], [])
 
     # Create result node if stdout/stderr present
     result_id = "result_#{random_id()}"
+    has_output = result[:stdout] != "" or result[:stderr] != ""
 
-    if result[:stdout] != "" or result[:stderr] != "" do
-      Graph.Writer.write_nodes([
+    if has_output do
+      Graph.Writer.write_subgraph(graph_shard(), [
         %{
+          id: result_id,
           name: result_id,
           type: "result",
           source_text: String.slice(result[:stdout] || result[:stderr] || "", 0, 500),
@@ -273,18 +272,22 @@ defmodule Mosaic.Fabric.AgentMemory do
             created_at: now
           }
         }
-      ])
-
-      Graph.Writer.write_edges([
-        %{source: exec_id, target: result_id, type: "produced", confidence: "EXTRACTED"}
-      ])
+      ], [])
     end
 
-    # Edges: agent --executed--> execution, execution --runs_in--> sandbox
-    Graph.Writer.write_edges([
+    # Edges reference nodes persisted above (and pre-existing agent/sandbox
+    # nodes); pass an empty node set so write_edges resolves endpoints from the shard.
+    edges = [
       %{source: agent_id, target: exec_id, type: "executed", confidence: "EXTRACTED"},
       %{source: exec_id, target: sandbox_id, type: "runs_in", confidence: "EXTRACTED"}
-    ])
+    ]
+
+    edges =
+      if has_output,
+        do: edges ++ [%{source: exec_id, target: result_id, type: "produced", confidence: "EXTRACTED"}],
+        else: edges
+
+    Graph.Writer.write_subgraph(graph_shard(), [], edges)
 
     # Store full result in handle registry
     full_result = %{
@@ -307,14 +310,15 @@ defmodule Mosaic.Fabric.AgentMemory do
   # ── Helpers ───────────────────────────────────────────────────
 
   defp ensure_agent_node(agent_id) do
-    Graph.Writer.write_nodes([
+    Graph.Writer.write_subgraph(graph_shard(), [
       %{
+        id: agent_id,
         name: agent_id,
         type: "agent",
         source_text: "Agent: #{agent_id}",
         properties: %{registered_at: DateTime.utc_now() |> DateTime.to_iso8601()}
       }
-    ])
+    ], [])
   rescue
     _ -> :ok  # Node may already exist
   end
@@ -324,16 +328,23 @@ defmodule Mosaic.Fabric.AgentMemory do
   record sandbox creation.
   """
   def ensure_sandbox_node(sandbox_id, image) do
-    Graph.Writer.write_nodes([
+    Graph.Writer.write_subgraph(graph_shard(), [
       %{
+        id: sandbox_id,
         name: sandbox_id,
         type: "sandbox",
         source_text: "Sandbox: #{sandbox_id} (#{image})",
         properties: %{image: image, created_at: DateTime.utc_now() |> DateTime.to_iso8601()}
       }
-    ])
+    ], [])
   rescue
     _ -> :ok
+  end
+
+  defp graph_shard do
+    path = Path.join(Mosaic.Config.get(:storage_path), "graph_default.db")
+    unless File.exists?(path), do: Mosaic.StorageManager.create_shard(path)
+    path
   end
 
   defp random_id, do: :crypto.strong_rand_bytes(6) |> Base.encode16(case: :lower)

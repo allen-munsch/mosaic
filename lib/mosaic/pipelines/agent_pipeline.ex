@@ -124,7 +124,7 @@ defmodule Mosaic.Pipelines.AgentPipeline do
   end
 
   @doc "List all defined pipelines."
-  def list(opts \\ []) do
+  def list(_opts \\ []) do
     with {:ok, conn} <- get_conn() do
       result = Mosaic.DB.query(conn, """
         SELECT name, MAX(version) as latest_version, COUNT(*) as total_versions,
@@ -184,7 +184,6 @@ defmodule Mosaic.Pipelines.AgentPipeline do
           end)
           {:ok, history}
 
-        {:ok, []} -> {:ok, []}
         err -> err
       end
     end
@@ -278,7 +277,6 @@ defmodule Mosaic.Pipelines.AgentPipeline do
   end
 
   defp execute_step(:traverse, config, results, _params) do
-    relation = config[:relation] || "callees"
     depth = Keyword.get(config, :depth, 1)
 
     expanded = Enum.flat_map(results, fn r ->

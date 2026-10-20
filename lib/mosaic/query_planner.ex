@@ -24,7 +24,7 @@ defmodule Mosaic.QueryPlanner do
     # Placeholder for predicate extraction
     # This would analyze the WHERE clause to identify conditions
     Logger.info("Extracting predicates from parsed SQL")
-    %{plan | predicates: [:mock_predicate_domain, :mock_predicate_date_range]}
+    Map.put(plan, :predicates, [:mock_predicate_domain, :mock_predicate_date_range])
   end
 
   # If query has "WHERE domain = 'example.com'", only hit shards
@@ -37,7 +37,7 @@ defmodule Mosaic.QueryPlanner do
     |> filter_by_bloom(preds)
     |> filter_by_metadata(preds)  # date ranges, etc.
 
-    %{plan | target_shards: filtered}
+    Map.put(plan, :target_shards, filtered)
   end
 
   defp filter_by_bloom(shards, _preds) do
@@ -58,7 +58,7 @@ defmodule Mosaic.QueryPlanner do
     # Placeholder for execution optimization logic
     # e.g., decide parallel vs sequential execution, batching
     Logger.info("Optimizing execution for #{length(shards)} target shards")
-    %{plan | execution_plan: :mock_optimized_plan}
+    Map.put(plan, :execution_plan, :mock_optimized_plan)
   end
 
   defp build_plan(%{execution_plan: _plan} = plan) do

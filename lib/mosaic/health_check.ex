@@ -6,11 +6,13 @@ defmodule Mosaic.HealthCheck do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
+  @impl true
   def init(_opts) do
     schedule_health_check()
     {:ok, %{last_check: nil, status: :healthy, metrics: %{}}}
   end
 
+  @impl true
   def handle_info(:check_health, state) do
     health_status = perform_health_check()
 

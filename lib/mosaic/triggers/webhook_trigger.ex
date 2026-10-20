@@ -148,7 +148,6 @@ defmodule Mosaic.Triggers.WebhookTrigger do
           triggers = Enum.map(rows, fn row -> row_to_trigger(row) end)
           {:ok, triggers}
 
-        {:ok, []} -> {:ok, []}
         err -> err
       end
     end

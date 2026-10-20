@@ -40,7 +40,6 @@ defmodule Mosaic.Memory.AgentMemory do
 
   require Logger
 
-  alias Mosaic.Vector.CascadedSearch
   alias Mosaic.HandleRegistry
 
   @type memory_type :: :episodic | :semantic | :procedural
@@ -489,7 +488,7 @@ defmodule Mosaic.Memory.AgentMemory do
     end)
   end
 
-  defp rank_memories(memories, query) do
+  defp rank_memories(memories, _query) do
     # Score: similarity * importance * recency_factor * access_factor
     now = DateTime.utc_now() |> DateTime.to_unix()
 

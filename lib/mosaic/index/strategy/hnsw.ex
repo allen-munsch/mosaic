@@ -83,10 +83,8 @@ defmodule Mosaic.Index.Strategy.HNSW do
   @impl true
   def index_batch(docs, state) do
     Enum.reduce_while(docs, {:ok, state}, fn {doc, embedding}, {:ok, acc} ->
-      case index_document(doc, embedding, acc) do
-        {:ok, new_state} -> {:cont, {:ok, new_state}}
-        error -> {:halt, error}
-      end
+      {:ok, new_state} = index_document(doc, embedding, acc)
+      {:cont, {:ok, new_state}}
     end)
   end
   

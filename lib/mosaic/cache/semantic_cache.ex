@@ -34,8 +34,6 @@ defmodule Mosaic.Cache.SemanticCache do
 
   require Logger
 
-  alias Mosaic.Vector.CascadedSearch
-
   @default_threshold 0.92
   @default_ttl_seconds 3600
   @max_cache_entries 100_000
@@ -241,7 +239,6 @@ defmodule Mosaic.Cache.SemanticCache do
   end
 
   defp count_results(results) when is_list(results), do: length(results)
-  defp count_results(_), do: 0
 
   defp evict_if_needed(conn) do
     case Mosaic.DB.query_one(conn, "SELECT COUNT(*) FROM semantic_cache") do

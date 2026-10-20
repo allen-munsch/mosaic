@@ -8,7 +8,7 @@ defmodule Mosaic.Graph.Writer do
 
   require Logger
 
-  @edge_types ~w(calls extends implements imports contains references)
+  @edge_types ~w(calls extends implements imports contains references has_memory links_to caused_by follows contradicts summarizes executed produced runs_in)
 
   @doc """
   Write a complete subgraph (nodes + edges) in a single transaction.

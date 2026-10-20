@@ -27,8 +27,6 @@ defmodule Mosaic.Eval.Tracker do
 
   require Logger
 
-  @eval_db_name "eval_tracker_"
-
   @doc """
   Record an evaluation event for later analysis.
 
@@ -220,8 +218,7 @@ defmodule Mosaic.Eval.Tracker do
           precision = precision_at_k(event.retrieved, event.expected, k)
           recall = recall_at_k(event.retrieved, event.expected, k)
 
-          {String.to_atom("precision_at_#{k}"), precision} &&
-          {String.to_atom("recall_at_#{k}"), recall} && [
+          [
             {String.to_atom("precision_at_#{k}"), precision},
             {String.to_atom("recall_at_#{k}"), recall}
           ]

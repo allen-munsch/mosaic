@@ -155,6 +155,11 @@ defmodule Mosaic.Fabric.Sandbox do
     get("/sessions/stats")
   end
 
+  @doc "List all live sandbox sessions."
+  def list_sessions do
+    get("/sessions")
+  end
+
   # ── HTTP Helpers ──────────────────────────────────────────────
 
   defp post(path, body) do

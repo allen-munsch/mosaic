@@ -435,7 +435,6 @@ defmodule Mosaic.MCP.Tools do
         {:ok, memories, handle} ->
           top = memories |> Enum.take(5) |> Enum.map(&Map.take(&1, [:id, :content, :type, :similarity, :score]))
           {:ok, "#{handle}\n\n#{Jason.encode!(%{count: length(memories), top_memories: top})}"}
-        error -> error
       end
     end
   end
@@ -481,9 +480,7 @@ defmodule Mosaic.MCP.Tools do
       if is_nil(cmd) or cmd == [] do
         {:error, "cmd is required (array of strings)"}
       else
-        image = Map.get(args, "image") || default_image()
         agent_id = Map.get(args, "agent_id", "default_agent")
-        timeout = Map.get(args, "timeout") || default_timeout()
 
         opts = build_sandbox_opts(args)
 
@@ -770,10 +767,6 @@ defmodule Mosaic.MCP.Tools do
 
   defp default_image do
     Mosaic.Config.get(:fabric_default_image, "ubuntu:24.04")
-  end
-
-  defp default_timeout do
-    Mosaic.Config.get(:fabric_default_timeout, 30)
   end
 
   defp build_sandbox_opts(args) do

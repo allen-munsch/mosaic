@@ -128,7 +128,6 @@ defmodule Mosaic.API do
       case Mosaic.Memory.AgentMemory.recall(session_id, query, limit: limit) do
         {:ok, memories, handle} ->
           json_ok(conn, %{memories: memories, handle: handle, count: length(memories)})
-        error -> json_error(conn, 500, inspect(error))
       end
     else
       {:error, msg} -> json_error(conn, 400, msg)
@@ -177,7 +176,7 @@ defmodule Mosaic.API do
     mt = conn.path_params["metric_type"] |> String.to_atom()
     last = (conn.params["last"] || "day") |> String.to_atom()
 
-    case Mosaic.Eval.Tracker.report(metric_type, last: last) do
+    case Mosaic.Eval.Tracker.report(mt, last: last) do
       {:ok, report} -> json_ok(conn, report)
       error -> json_error(conn, 500, inspect(error))
     end
@@ -543,7 +542,6 @@ defmodule Mosaic.API do
 
     case Mosaic.Indexer.delete_document(doc_id) do
       :ok -> json_ok(conn, %{status: "deleted", id: doc_id})
-      _ -> json_error(conn, 500, "Failed to delete document: #{doc_id}")
     end
   end
 

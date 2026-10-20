@@ -17,8 +17,6 @@ defmodule Mosaic.API.RateLimiter do
 
   import Plug.Conn
 
-  require Logger
-
   @table_name :mosaic_rate_limiter_buckets
   @cleanup_interval_ms 60_000
 

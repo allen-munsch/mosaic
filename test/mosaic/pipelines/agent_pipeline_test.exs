@@ -3,7 +3,10 @@ defmodule Mosaic.Pipelines.AgentPipelineTest do
 
   alias Mosaic.Pipelines.AgentPipeline
 
-  setup do
+  setup context do
+    {:ok, setup_context} = Mosaic.TestHelpers.setup_integration_test(context)
+    on_exit(setup_context.on_exit)
+
     {:ok, test_name: :"test_pipeline_#{System.unique_integer([:positive])}"}
   end
 

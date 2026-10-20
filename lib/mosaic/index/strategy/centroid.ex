@@ -45,10 +45,8 @@ defmodule Mosaic.Index.Strategy.Centroid do
   @impl true
   def index_batch(docs, state) do
     Enum.reduce_while(docs, {:ok, state}, fn {doc, embedding}, {:ok, acc_state} ->
-      case index_document(doc, embedding, acc_state) do
-        {:ok, new_state} -> {:cont, {:ok, new_state}}
-        error -> {:halt, error}
-      end
+      {:ok, new_state} = index_document(doc, embedding, acc_state)
+      {:cont, {:ok, new_state}}
     end)
   end
 

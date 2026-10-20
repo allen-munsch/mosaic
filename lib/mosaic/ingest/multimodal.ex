@@ -29,7 +29,6 @@ defmodule Mosaic.Ingest.Multimodal do
   require Logger
 
   alias Mosaic.Graph.Writer
-  alias Mosaic.Embedding.Matryoshka
 
   @image_extensions ~w(.jpg .jpeg .png .gif .webp .bmp .svg)
   @audio_extensions ~w(.mp3 .wav .ogg .flac .m4a .aac)
