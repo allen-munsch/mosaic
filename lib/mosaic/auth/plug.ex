@@ -22,9 +22,11 @@ defmodule Mosaic.Auth.Plug do
   require Logger
 
   @doc false
+  @spec init(term()) :: term()
   def init(opts), do: opts
 
   @doc false
+  @spec call(Plug.Conn.t(), term()) :: Plug.Conn.t()
   def call(conn, _opts) do
     case authenticate(conn) do
       {:ok, claims} ->
@@ -46,6 +48,7 @@ defmodule Mosaic.Auth.Plug do
   end
 
   @doc "Manually authenticate a connection. Returns {:ok, claims} or {:error, reason}."
+  @spec authenticate(Plug.Conn.t()) :: {:ok, map()} | {:error, atom()}
   def authenticate(conn) do
     # Try API key first (takes precedence)
     case get_req_header(conn, "x-api-key") do
@@ -73,6 +76,7 @@ defmodule Mosaic.Auth.Plug do
   end
 
   @doc "Check if the authenticated connection has a required scope."
+  @spec require_scope(Plug.Conn.t(), String.t()) :: Plug.Conn.t()
   def require_scope(conn, scope) do
     claims = conn.assigns[:auth_claims]
 

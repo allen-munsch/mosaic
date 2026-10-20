@@ -23,6 +23,8 @@ defmodule Mosaic.Auth.JWT do
   @default_ttl 86_400  # 24 hours
 
   @doc "Generate a JWT token for a user/tenant."
+  @spec generate_token(String.t(), [String.t()], keyword()) ::
+          {:ok, String.t(), map()} | {:error, term()}
   def generate_token(user_id, scopes, opts \\ []) when is_binary(user_id) and is_list(scopes) do
     ttl = Keyword.get(opts, :ttl, configured_ttl())
     now = DateTime.utc_now() |> DateTime.to_unix()
@@ -40,23 +42,21 @@ defmodule Mosaic.Auth.JWT do
 
     signer = joken_signer()
 
-    case Joken.generate_and_sign(claims, signer) do
+    case Joken.encode_and_sign(claims, signer) do
       {:ok, token, _claims} -> {:ok, token, claims}
       {:error, reason} -> {:error, reason}
     end
   end
 
   @doc "Verify a JWT token and return claims."
+  @spec verify_token(String.t()) :: {:ok, map()} | {:error, :invalid_token}
   def verify_token(token) when is_binary(token) do
     signer = joken_signer()
 
-    case Joken.verify_and_validate(token, signer, [
-      {:validate_exp, true},
-      {:validate_iss, configured_issuer()}
-    ]) do
-      {:ok, claims} ->
-        verify_scopes(claims)
-
+    with {:ok, claims} <- Joken.verify(token, signer),
+         :ok <- validate_claims(claims) do
+      verify_scopes(claims)
+    else
       {:error, reason} ->
         Logger.debug("JWT verification failed: #{inspect(reason)}")
         {:error, :invalid_token}
@@ -64,17 +64,20 @@ defmodule Mosaic.Auth.JWT do
   end
 
   @doc "Check if a verified claims map has a required scope."
+  @spec has_scope?(map(), String.t()) :: boolean()
   def has_scope?(claims, required_scope) when is_binary(required_scope) do
     scopes = String.split(Map.get(claims, "scope", ""), " ")
     required_scope in scopes or "admin" in scopes
   end
 
   @doc "Get the user/tenant ID from claims."
+  @spec subject(map()) :: String.t() | nil
   def subject(claims) do
     Map.get(claims, "sub")
   end
 
   @doc "Get the scopes from claims."
+  @spec scopes(map()) :: [String.t()]
   def scopes(claims) do
     Map.get(claims, "scope", "")
     |> String.split(" ")
@@ -82,6 +85,7 @@ defmodule Mosaic.Auth.JWT do
   end
 
   @doc "Extract token from Authorization header."
+  @spec extract_token(String.t() | nil) :: {:ok, String.t()} | {:error, :invalid_header | :missing_header}
   def extract_token(header) when is_binary(header) do
     case String.split(header, " ") do
       ["Bearer", token] -> {:ok, token}
@@ -96,6 +100,18 @@ defmodule Mosaic.Auth.JWT do
   defp joken_signer do
     secret = configured_secret()
     Joken.Signer.create(@default_algorithm, secret)
+  end
+
+  defp validate_claims(claims) do
+    now = DateTime.utc_now() |> DateTime.to_unix()
+    exp = Map.get(claims, "exp")
+    iss = Map.get(claims, "iss")
+
+    cond do
+      is_integer(exp) and exp < now -> {:error, :expired}
+      iss != nil and iss != configured_issuer() -> {:error, :invalid_issuer}
+      true -> :ok
+    end
   end
 
   defp verify_scopes(claims) do

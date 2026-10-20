@@ -6,10 +6,19 @@ defmodule Mosaic.EmbeddingService do
   defp zero_embedding, do: List.duplicate(0.0, Mosaic.Config.get(:embedding_dim, 384))
 
   defmodule State do
+    @type t :: %__MODULE__{
+            model_type: String.t() | atom(),
+            model_ref: term(),
+            model_name: String.t(),
+            dimension: pos_integer()
+          }
     defstruct [:model_type, :model_ref, :model_name, :dimension]
   end
 
+  @type embedding :: [float()]
+
   @doc "Supported embedding model configurations."
+  @spec models() :: %{String.t() => map()}
   def models do
     %{
       "all-MiniLM-L6-v2" => %{dim: 384, source: :huggingface, model: "sentence-transformers/all-MiniLM-L6-v2"},
@@ -24,6 +33,7 @@ defmodule Mosaic.EmbeddingService do
   end
 
   @doc "Get the dimension for the configured model."
+  @spec configured_dimension() :: pos_integer()
   def configured_dimension do
     model_name = Mosaic.Config.get(:embedding_model_name, "all-MiniLM-L6-v2")
     case Map.get(models(), model_name) do
@@ -32,8 +42,10 @@ defmodule Mosaic.EmbeddingService do
     end
   end
 
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
+  @spec init(keyword()) :: {:ok, State.t()}
   def init(_opts) do
     model_name = Mosaic.Config.get(:embedding_model_name, "all-MiniLM-L6-v2")
     model_type = Mosaic.Config.get(:embedding_provider, "local")
@@ -69,6 +81,7 @@ defmodule Mosaic.EmbeddingService do
     %{model: serving, tokenizer: tokenizer}
   end
 
+  @spec encode(String.t()) :: embedding()
   def encode(text) when is_binary(text) do
     case Mosaic.EmbeddingCache.get(text) do
       {:ok, embedding} -> embedding
@@ -76,30 +89,43 @@ defmodule Mosaic.EmbeddingService do
     end
   end
 
+  @spec encode_batch([String.t()]) :: [embedding()]
   def encode_batch(texts) when is_list(texts) do
     task = Task.async(fn ->
-      Nx.Serving.batched_run(MosaicEmbedding, texts)
-      |> Enum.map(fn %{embedding: t} -> Nx.to_list(t) end)
+      try do
+        Nx.Serving.batched_run(MosaicEmbedding, texts)
+        |> Enum.map(fn %{embedding: t} -> Nx.to_list(t) end)
+      rescue
+        _ -> :unavailable
+      catch
+        :exit, _ -> :unavailable
+      end
     end)
     case Task.yield(task, @timeout) || Task.shutdown(task) do
-      {:ok, embeddings} -> embeddings
-      nil ->
-        Logger.warning("Batch embedding timeout, returning zeros")
+      {:ok, embeddings} when is_list(embeddings) -> embeddings
+      _ ->
+        Logger.warning("Batch embedding unavailable, returning zeros")
         Enum.map(texts, fn _ -> zero_embedding() end)
     end
   end
 
   defp generate_with_fallback(text) do
     task = Task.async(fn ->
-      %{embedding: tensor} = Nx.Serving.batched_run(MosaicEmbedding, text)
-      Nx.to_list(tensor)
+      try do
+        %{embedding: tensor} = Nx.Serving.batched_run(MosaicEmbedding, text)
+        Nx.to_list(tensor)
+      rescue
+        _ -> :unavailable
+      catch
+        :exit, _ -> :unavailable
+      end
     end)
     case Task.yield(task, @timeout) || Task.shutdown(task) do
-      {:ok, embedding} ->
+      {:ok, embedding} when is_list(embedding) ->
         Mosaic.EmbeddingCache.put(text, embedding)
         embedding
-      nil ->
-        Logger.warning("Embedding timeout for: #{String.slice(text, 0, 50)}...")
+      _ ->
+        Logger.warning("Embedding unavailable for: #{String.slice(text, 0, 50)}...")
         zero_embedding()
     end
   end

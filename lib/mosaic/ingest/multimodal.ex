@@ -75,7 +75,7 @@ defmodule Mosaic.Ingest.Multimodal do
         embedding: embedding
       }
 
-      with {:ok, _} <- Writer.write_subgraph([node], []) do
+      with {:ok, _} <- Writer.write_subgraph(graph_shard(), [node], []) do
         Logger.info("Image ingested: #{path} (caption: #{String.slice(caption, 0, 80)})")
         {:ok, node}
       end
@@ -134,7 +134,7 @@ defmodule Mosaic.Ingest.Multimodal do
         %{source_id: node.id, target_id: c.id, type: "contains"}
       end)
 
-      with {:ok, _} <- Writer.write_subgraph([node | chunk_nodes], edges) do
+      with {:ok, _} <- Writer.write_subgraph(graph_shard(), [node | chunk_nodes], edges) do
         Logger.info("Audio ingested: #{path} (#{length(chunks)} chunks)")
         {:ok, node, %{chunks: length(chunks), transcript_length: String.length(transcript)}}
       end
@@ -193,7 +193,7 @@ defmodule Mosaic.Ingest.Multimodal do
         %{source_id: node.id, target_id: c.id, type: "contains"}
       end)
 
-      with {:ok, _} <- Writer.write_subgraph([node | chunk_nodes], edges) do
+      with {:ok, _} <- Writer.write_subgraph(graph_shard(), [node | chunk_nodes], edges) do
         Logger.info("YouTube ingested: #{video_id} (#{length(chunks)} chunks)")
         {:ok, node, %{chunks: length(chunks), video_id: video_id}}
       end
@@ -307,5 +307,11 @@ defmodule Mosaic.Ingest.Multimodal do
 
   defp hash_path(path) do
     :crypto.hash(:sha256, path) |> Base.encode16(case: :lower) |> String.slice(0, 16)
+  end
+
+  defp graph_shard do
+    path = Path.join(Mosaic.Config.get(:storage_path), "graph_default.db")
+    unless File.exists?(path), do: Mosaic.StorageManager.create_shard(path)
+    path
   end
 end

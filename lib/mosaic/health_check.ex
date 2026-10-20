@@ -80,14 +80,19 @@ defmodule Mosaic.HealthCheck do
   end
 
   defp check_embedding_service do
-    try do
-      task = Task.async(fn -> Nx.Serving.batched_run(MosaicEmbedding, "test") end)
-      case Task.yield(task, 2000) || Task.shutdown(task) do
-        {:ok, _} -> {:embeddings, :ok}
-        nil -> {:embeddings, :timeout}
+    task = Task.async(fn ->
+      try do
+        Nx.Serving.batched_run(MosaicEmbedding, "test")
+      rescue
+        _ -> :unavailable
+      catch
+        :exit, _ -> :unavailable
       end
-    rescue
-      _ -> {:embeddings, :failed}
+    end)
+    case Task.yield(task, 2000) || Task.shutdown(task) do
+      {:ok, :unavailable} -> {:embeddings, :failed}
+      {:ok, _} -> {:embeddings, :ok}
+      nil -> {:embeddings, :timeout}
     end
   end
 

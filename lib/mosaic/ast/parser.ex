@@ -33,6 +33,7 @@ defmodule Mosaic.AST.Parser do
   # ── File Parsing ──────────────────────────────────────────────
 
   @doc "Parse a single file. Detects language from extension."
+  @spec parse_file(String.t(), keyword()) :: {:ok, term()} | {:error, String.t()}
   def parse_file(path, opts \\ []) do
     lang = Keyword.get(opts, :language) || detect_language(path)
 
@@ -50,6 +51,7 @@ defmodule Mosaic.AST.Parser do
   end
 
   @doc "Parse source string directly."
+  @spec parse_string(String.t(), keyword()) :: {:ok, term()} | {:error, String.t()}
   def parse_string(source, opts \\ []) do
     lang = Keyword.fetch!(opts, :language)
 
@@ -63,6 +65,7 @@ defmodule Mosaic.AST.Parser do
   # ── Raw AST (--json output) ────────────────────────────────────
 
   @doc "Parse source and return raw ast-grep JSON CST."
+  @spec parse_raw(String.t(), atom()) :: {:ok, term()} | {:error, String.t()}
   def parse_raw(source, lang) do
     with {:ok, json} <- run_ast_grep(source, lang) do
       case Jason.decode(json) do
@@ -73,11 +76,13 @@ defmodule Mosaic.AST.Parser do
   end
 
   @doc "Check if a language is supported by ast-grep."
+  @spec supports_language?(atom()) :: boolean()
   def supports_language?(lang) do
     lang in @default_languages
   end
 
   @doc "Detect language from file extension."
+  @spec detect_language(String.t()) :: atom() | nil
   def detect_language(path) do
     ext = Path.extname(path) |> String.downcase()
 

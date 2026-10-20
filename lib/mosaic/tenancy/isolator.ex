@@ -35,17 +35,20 @@ defmodule Mosaic.Tenancy.Isolator do
   @system_tenant "_system"
 
   @doc "Get the storage path for a specific tenant."
+  @spec storage_path(String.t()) :: String.t()
   def storage_path(tenant_id) when is_binary(tenant_id) do
     base = Mosaic.Config.get(:storage_path)
     Path.join(base, sanitize_tenant_id(tenant_id))
   end
 
   @doc "Get the system storage path."
+  @spec system_path() :: String.t()
   def system_path do
     storage_path(@system_tenant)
   end
 
   @doc "List all shard files for a tenant."
+  @spec list_shards(String.t()) :: {:ok, [String.t()]}
   def list_shards(tenant_id) when is_binary(tenant_id) do
     path = storage_path(tenant_id)
     with true <- File.dir?(path) do
@@ -58,6 +61,7 @@ defmodule Mosaic.Tenancy.Isolator do
   end
 
   @doc "Create a new tenant with storage allocation."
+  @spec create_tenant(String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def create_tenant(tenant_id, name, opts \\ []) when is_binary(tenant_id) do
     quota = Keyword.get(opts, :quota_bytes, 10_737_418_240) # 10 GB default
     path = storage_path(tenant_id)
@@ -74,6 +78,7 @@ defmodule Mosaic.Tenancy.Isolator do
   end
 
   @doc "Delete a tenant and all their data."
+  @spec delete_tenant(String.t()) :: :ok | {:error, :cannot_delete_system_tenant}
   def delete_tenant(tenant_id) when is_binary(tenant_id) do
     if tenant_id == @system_tenant do
       {:error, :cannot_delete_system_tenant}
@@ -82,8 +87,6 @@ defmodule Mosaic.Tenancy.Isolator do
 
       with {:ok, conn} <- get_system_conn() do
         Mosaic.DB.execute(conn, "DELETE FROM tenants WHERE tenant_id = ?", [tenant_id])
-        # Also delete api_keys
-        Mosaic.DB.execute(conn, "DELETE FROM api_keys WHERE tenant_id = ?", [tenant_id])
         release_conn(conn)
       end
 
@@ -96,6 +99,7 @@ defmodule Mosaic.Tenancy.Isolator do
   end
 
   @doc "Get tenant info from the system database."
+  @spec get_tenant(String.t()) :: {:ok, map()} | {:error, :not_found | term()}
   def get_tenant(tenant_id) when is_binary(tenant_id) do
     with {:ok, conn} <- get_system_conn() do
       result = Mosaic.DB.query(conn,
@@ -122,6 +126,7 @@ defmodule Mosaic.Tenancy.Isolator do
   end
 
   @doc "Get storage usage for a tenant in bytes."
+  @spec storage_usage(String.t()) :: {:ok, non_neg_integer()}
   def storage_usage(tenant_id) when is_binary(tenant_id) do
     path = storage_path(tenant_id)
 
@@ -138,6 +143,7 @@ defmodule Mosaic.Tenancy.Isolator do
   end
 
   @doc "Check if a tenant has exceeded their quota."
+  @spec quota_exceeded?(String.t()) :: boolean()
   def quota_exceeded?(tenant_id) when is_binary(tenant_id) do
     with {:ok, tenant} <- get_tenant(tenant_id),
          {:ok, usage} <- storage_usage(tenant_id) do
@@ -148,6 +154,7 @@ defmodule Mosaic.Tenancy.Isolator do
   end
 
   @doc "List all active tenants."
+  @spec list_tenants() :: {:ok, [map()]} | {:error, term()}
   def list_tenants do
     with {:ok, conn} <- get_system_conn() do
       result = Mosaic.DB.query(conn,
@@ -167,6 +174,7 @@ defmodule Mosaic.Tenancy.Isolator do
   end
 
   @doc "Initialize the system tenant storage (auth db, system db)."
+  @spec init_system() :: :ok
   def init_system do
     Mosaic.Auth.APIKey.init_auth_db()
     system_path() |> File.mkdir_p!()
@@ -202,6 +210,7 @@ defmodule Mosaic.Tenancy.Isolator do
   end
 
   @doc "Log an operation for billing/usage tracking."
+  @spec log_usage(String.t(), String.t(), non_neg_integer(), non_neg_integer()) :: :ok | {:error, term()}
   def log_usage(tenant_id, operation, bytes_processed \\ 0, duration_ms \\ 0) do
     with {:ok, conn} <- get_system_conn() do
       Mosaic.DB.execute(conn,

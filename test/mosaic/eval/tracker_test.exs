@@ -18,8 +18,10 @@ defmodule Mosaic.Eval.TrackerTest do
 
   describe "report/2" do
     test "returns metrics report" do
+      metric = :"retrieval_report_#{System.unique_integer([:positive])}"
+
       # Insert a few events
-      Tracker.track(:retrieval,
+      Tracker.track(metric,
         query: "perfect match",
         retrieved: [%{id: "a"}, %{id: "b"}, %{id: "c"}],
         expected: ["a", "b"],
@@ -27,7 +29,7 @@ defmodule Mosaic.Eval.TrackerTest do
         latency_ms: 10
       )
 
-      Tracker.track(:retrieval,
+      Tracker.track(metric,
         query: "partial match",
         retrieved: [%{id: "x"}, %{id: "y"}],
         expected: ["y"],
@@ -35,7 +37,7 @@ defmodule Mosaic.Eval.TrackerTest do
         latency_ms: 50
       )
 
-      {:ok, report} = Tracker.report(:retrieval, last: :day, k_values: [2, 5])
+      {:ok, report} = Tracker.report(metric, last: :day, k_values: [2, 5])
 
       assert report.total_events == 2
       assert is_number(report.mrr) or report.mrr == nil

@@ -10,8 +10,19 @@ defmodule Mosaic.ConnectionPool do
 
   defstruct [:pools, :config]
 
+  @type conn :: reference()
+  @type config :: %{
+          max_per_shard: pos_integer(),
+          busy_timeout: pos_integer(),
+          wal_autocheckpoint: pos_integer(),
+          journal_size_limit: pos_integer()
+        }
+  @type t :: %__MODULE__{pools: map(), config: config()}
+
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
+  @spec init(keyword()) :: {:ok, t()}
   def init(opts) do
     config = %{
       max_per_shard: Keyword.get(opts, :max_per_shard, 5),
@@ -22,8 +33,26 @@ defmodule Mosaic.ConnectionPool do
     {:ok, %__MODULE__{pools: %{}, config: config}}
   end
 
+  @spec checkout(String.t()) :: {:ok, conn()} | {:error, term()}
   def checkout(shard_path), do: GenServer.call(__MODULE__, {:checkout, shard_path})
+
+  @spec checkin(String.t(), conn()) :: :ok
   def checkin(shard_path, conn), do: GenServer.cast(__MODULE__, {:checkin, shard_path, conn})
+
+  @spec scoped_checkout(String.t(), (conn() -> term())) :: term()
+  def scoped_checkout(shard_path, fun) do
+    case checkout(shard_path) do
+      {:ok, conn} ->
+        try do
+          fun.(conn)
+        after
+          checkin(shard_path, conn)
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
 
   def handle_call({:checkout, shard_path}, _from, state) do
     Logger.debug("Checkout called with: #{inspect(shard_path)}")

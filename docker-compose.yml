@@ -20,7 +20,7 @@ services:
       MOSAIC_CACHE_BACKEND: ets
       MOSAIC_INDEX_STRATEGY: hnsw
       CLUSTER_SECRET: "${CLUSTER_SECRET:-mosaic-secret}"
-      SQLITE_VEC_PATH: /app/deps/sqlite_vec/priv/0.1.5/vec0.so
+      SQLITE_VEC_PATH: /app/lib/sqlite_vec-0.1.0/priv/0.1.5/vec0.so
     ports:
       - "4040:4040"
     volumes:

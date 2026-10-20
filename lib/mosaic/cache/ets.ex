@@ -11,11 +11,13 @@ defmodule Mosaic.Cache.ETS do
 
   # Server API
   @impl Mosaic.Cache
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
   @impl true
+  @spec init(keyword()) :: {:ok, %{table: atom()}}
   def init(opts) do
     table_name = Keyword.get(opts, :table, __MODULE__)
     :ets.new(table_name, [:set, :public, :named_table, read_concurrency: true])
@@ -25,31 +27,37 @@ defmodule Mosaic.Cache.ETS do
 
   # Client API
   @impl Mosaic.Cache
+  @spec get(term(), atom()) :: {:ok, term()} | :miss
   def get(key, name \\__MODULE__) do
     GenServer.call(name, {:get, key})
   end
 
   @impl Mosaic.Cache
+  @spec put(term(), term(), non_neg_integer() | :infinity, atom()) :: :ok
   def put(key, value, ttl, name \\__MODULE__) do
     GenServer.call(name, {:put, key, value, ttl})
   end
 
   @impl Mosaic.Cache
+  @spec delete(term(), atom()) :: :ok
   def delete(key, name \\__MODULE__) do
     GenServer.call(name, {:delete, key})
   end
 
   @impl Mosaic.Cache
+  @spec clear(atom()) :: :ok
   def clear(name \\__MODULE__) do
     GenServer.call(name, :clear)
   end
 
   @impl true
+  @spec get_many([term()], atom()) :: %{term() => term()}
   def get_many(keys, name \\__MODULE__) do
     GenServer.call(name, {:get_many, keys})
   end
 
   @impl true
+  @spec put_many([{term(), term()}], non_neg_integer() | :infinity, atom()) :: :ok
   def put_many(entries, ttl, name \\__MODULE__) do
     GenServer.call(name, {:put_many, entries, ttl})
   end

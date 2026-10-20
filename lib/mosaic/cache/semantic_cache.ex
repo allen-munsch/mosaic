@@ -45,6 +45,7 @@ defmodule Mosaic.Cache.SemanticCache do
 
   Returns `{:hit, results, stats}` or `:miss`.
   """
+  @spec lookup(String.t(), keyword()) :: {:hit, term(), map()} | :miss
   def lookup(query, opts \\ []) when is_binary(query) do
     threshold = Keyword.get(opts, :threshold, @default_threshold)
 
@@ -68,6 +69,7 @@ defmodule Mosaic.Cache.SemanticCache do
   @doc """
   Store query results in the cache.
   """
+  @spec store(String.t(), term(), keyword()) :: :ok
   def store(query, results, opts \\ []) when is_binary(query) do
     ttl = Keyword.get(opts, :ttl, @default_ttl_seconds)
     embedding = Mosaic.EmbeddingService.encode(query)
@@ -97,6 +99,7 @@ defmodule Mosaic.Cache.SemanticCache do
   @doc """
   Invalidate a specific cache entry.
   """
+  @spec invalidate(String.t()) :: :ok
   def invalidate(query) when is_binary(query) do
     cache_key = cache_key_for(query)
     with {:ok, conn} <- get_cache_conn() do
@@ -109,6 +112,7 @@ defmodule Mosaic.Cache.SemanticCache do
   @doc """
   Clear all expired cache entries.
   """
+  @spec purge_expired() :: {:ok, term()}
   def purge_expired do
     with {:ok, conn} <- get_cache_conn() do
       Mosaic.DB.execute(conn, "DELETE FROM semantic_cache WHERE expires_at < datetime('now')")
@@ -121,6 +125,7 @@ defmodule Mosaic.Cache.SemanticCache do
   @doc """
   Return cache statistics.
   """
+  @spec stats() :: {:ok, map()}
   def stats do
     hits = get_counter(:semantic_cache_hits)
     misses = get_counter(:semantic_cache_misses)
@@ -147,6 +152,7 @@ defmodule Mosaic.Cache.SemanticCache do
   @doc """
   Reset all cache counters and entries.
   """
+  @spec reset() :: :ok
   def reset do
     with {:ok, conn} <- get_cache_conn() do
       Mosaic.DB.execute(conn, "DELETE FROM semantic_cache")
@@ -161,27 +167,58 @@ defmodule Mosaic.Cache.SemanticCache do
 
   defp find_closest_cached_query(query, threshold) do
     embedding = Mosaic.EmbeddingService.encode(query)
-    embedding_json = Jason.encode!(embedding)
+
+    if Enum.all?(embedding, &(&1 == 0.0)) do
+      # Embeddings unavailable: degrade to exact cache-key match.
+      exact_match(query)
+    else
+      embedding_json = Jason.encode!(embedding)
+
+      with {:ok, conn} <- get_cache_conn() do
+        result = Mosaic.DB.query(conn, """
+          SELECT cache_key, query, embedding, results,
+                 vec_distance_cosine(v.embedding, ?) as distance
+          FROM vec_semantic_cache v
+          JOIN semantic_cache c ON c.cache_key = v.cache_key
+          WHERE c.expires_at > datetime('now')
+            AND vec_distance_cosine(v.embedding, ?) < ?
+          ORDER BY distance ASC
+          LIMIT 1
+        """, [embedding_json, embedding_json, 1.0 - threshold])
+
+        release_conn(conn)
+
+        case result do
+          {:ok, [[_key, cached_query, _emb, compressed_results, distance] | _]} ->
+            results = :erlang.binary_to_term(compressed_results)
+            similarity = 1.0 - to_float(distance)
+            {:ok, %{similarity: similarity, results: results, cached_query: cached_query}}
+
+          {:ok, []} ->
+            :miss
+
+          err -> err
+        end
+      end
+    end
+  end
+
+  defp exact_match(query) do
+    cache_key = cache_key_for(query)
 
     with {:ok, conn} <- get_cache_conn() do
       result = Mosaic.DB.query(conn, """
-        SELECT cache_key, query, embedding, results,
-               vec_distance_cosine(v.embedding, ?) as distance
-        FROM vec_semantic_cache v
-        JOIN semantic_cache c ON c.cache_key = v.cache_key
-        WHERE c.expires_at > datetime('now')
-          AND vec_distance_cosine(v.embedding, ?) < ?
-        ORDER BY distance ASC
-        LIMIT 1
-      """, [embedding_json, embedding_json, 1.0 - threshold])
+        SELECT cache_key, query, results
+        FROM semantic_cache
+        WHERE cache_key = ? AND expires_at > datetime('now')
+      """, [cache_key])
 
       release_conn(conn)
 
       case result do
-        {:ok, [[_key, cached_query, _emb, compressed_results, distance] | _]} ->
+        {:ok, [[_key, cached_query, compressed_results] | _]} ->
           results = :erlang.binary_to_term(compressed_results)
-          similarity = 1.0 - to_float(distance)
-          {:ok, %{similarity: similarity, results: results, cached_query: cached_query}}
+          {:ok, %{similarity: 1.0, results: results, cached_query: cached_query}}
 
         {:ok, []} ->
           :miss

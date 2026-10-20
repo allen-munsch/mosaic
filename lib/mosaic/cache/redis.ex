@@ -7,11 +7,13 @@ defmodule Mosaic.Cache.Redis do
   @behaviour Mosaic.Cache
 
   @impl Mosaic.Cache
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
   @impl true
+  @spec init(keyword()) :: {:ok, %{conn: pid()}}
   def init(opts) do
     url = Keyword.get(opts, :url, "redis://localhost:6379")
     {:ok, conn} = Redix.start_link(url)
@@ -19,29 +21,35 @@ defmodule Mosaic.Cache.Redis do
   end
 
   @impl Mosaic.Cache
+  @spec get(term(), atom()) :: {:ok, term()} | :miss | {:error, term()}
   def get(key, name \\__MODULE__) do
     GenServer.call(name, {:get, key})
   end
 
   @impl Mosaic.Cache
+  @spec put(term(), term(), non_neg_integer() | :infinity, atom()) :: :ok | {:error, term()}
   def put(key, value, ttl, name \\__MODULE__) do
     GenServer.call(name, {:put, key, value, ttl})
   end
 
   @impl Mosaic.Cache
+  @spec delete(term(), atom()) :: :ok | {:error, term()}
   def delete(key, name \\__MODULE__) do
     GenServer.call(name, {:delete, key})
   end
 
   @impl Mosaic.Cache
+  @spec clear(atom()) :: :ok | {:error, term()}
   def clear(name \\__MODULE__) do
     GenServer.call(name, :clear)
   end
 
   @impl Mosaic.Cache
+  @spec get_many([term()], atom()) :: %{term() => term()}
   def get_many(keys, name \\ __MODULE__), do: GenServer.call(name, {:get_many, keys})
 
   @impl Mosaic.Cache
+  @spec put_many([{term(), term()}], non_neg_integer() | :infinity, atom()) :: :ok
   def put_many(entries, ttl, name \\ __MODULE__), do: GenServer.call(name, {:put_many, entries, ttl})
 
   @impl true

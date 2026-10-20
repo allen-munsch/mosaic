@@ -56,8 +56,8 @@ defmodule Mosaic.HandleRegistry do
         VALUES (?, ?, ?, ?, ?, ?)
       """, [handle_name, result_type, count, preview, encoded, ttl])
 
-      release_connection(conn)
       evict_if_needed(conn)
+      release_connection(conn)
     end
 
     "#{handle_name}: #{String.capitalize(result_type)}(#{count}) [#{preview}]"
@@ -258,15 +258,28 @@ defmodule Mosaic.HandleRegistry do
   end
 
   defp ensure_handles_table(db_path) do
-    File.mkdir_p!(Path.dirname(db_path))
+    if Process.get({:handle_schema_ensured, db_path}) do
+      :ok
+    else
+      File.mkdir_p!(Path.dirname(db_path))
 
-    # Touch the file so SQLite can open it
-    unless File.exists?(db_path) do
-      File.write!(db_path, "")
+      # Touch the file so SQLite can open it
+      unless File.exists?(db_path) do
+        File.write!(db_path, "")
+      end
+
+      ensure_schema(db_path, 5)
+      Process.put({:handle_schema_ensured, db_path}, true)
     end
+  end
 
-    case Mosaic.ConnectionPool.checkout(db_path) do
-      {:ok, conn} ->
+  defp ensure_schema(db_path, attempts) when attempts <= 0 do
+    raise "failed to initialize handles table in #{db_path} after retries"
+  end
+
+  defp ensure_schema(db_path, attempts) do
+    result =
+      Mosaic.ConnectionPool.scoped_checkout(db_path, fn conn ->
         Mosaic.DB.execute(conn, """
           CREATE TABLE IF NOT EXISTS handles (
             handle_name TEXT PRIMARY KEY,
@@ -279,10 +292,27 @@ defmodule Mosaic.HandleRegistry do
           )
         """)
         Mosaic.DB.execute(conn, "CREATE INDEX IF NOT EXISTS idx_handles_created ON handles(created_at)")
-        Mosaic.ConnectionPool.checkin(db_path, conn)
+
+        case Mosaic.DB.query_one(conn, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='handles'") do
+          {:ok, n} when is_integer(n) and n > 0 -> :ok
+          _ -> {:error, :schema_not_created}
+        end
+      end)
+
+    case result do
+      :ok ->
         :ok
-      _ -> :ok
+
+      other ->
+        Logger.warning("handle schema init failed, retrying: #{inspect(other)}")
+        Process.sleep(50)
+        ensure_schema(db_path, attempts - 1)
     end
+  rescue
+    e ->
+      Logger.warning("handle schema init raised, retrying: #{inspect(e)}")
+      Process.sleep(50)
+      ensure_schema(db_path, attempts - 1)
   end
 
   defp release_connection(conn) do

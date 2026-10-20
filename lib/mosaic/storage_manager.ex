@@ -4,13 +4,23 @@ defmodule Mosaic.StorageManager do
 
 
 
+  @spec start_link(term()) :: GenServer.on_start()
   def start_link(_opts), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+
+  @spec init(term()) :: {:ok, map()}
   def init(nil), do: {:ok, %{}}
 
 
+  @spec create_shard(String.t()) :: {:ok, String.t()} | {:error, term()}
   def create_shard(path), do: GenServer.call(__MODULE__, {:create_shard, path})
+
+  @spec open_shard(String.t()) :: {:ok, term()} | {:error, term()}
   def open_shard(path), do: GenServer.call(__MODULE__, {:open_shard, path})
+
+  @spec get_shard_doc_count(String.t()) :: {:ok, integer()} | {:error, term()}
   def get_shard_doc_count(path), do: GenServer.call(__MODULE__, {:get_shard_doc_count, path})
+
+  @spec archive_shard(String.t()) :: :ok
   def archive_shard(path), do: GenServer.call(__MODULE__, {:archive_shard, path})
   def handle_call({:create_shard, path}, _from, state) do
     Logger.warning(">>> create_shard called with path: #{path}")

@@ -21,6 +21,7 @@ defmodule Mosaic.Auth.APIKey do
   @key_id_prefix "mkid_"
 
   @doc "Create a new API key for a tenant with specified scopes."
+  @spec create_key(String.t(), [String.t()], keyword()) :: {:ok, String.t(), String.t()}
   def create_key(tenant_id, scopes, opts \\ []) when is_binary(tenant_id) and is_list(scopes) do
     key_id = "#{@key_id_prefix}#{generate_id()}"
     raw_key = generate_raw_key()
@@ -42,6 +43,7 @@ defmodule Mosaic.Auth.APIKey do
   end
 
   @doc "Validate an API key (format: mk_live_KEYID_RAWKEY)."
+  @spec validate_key(String.t()) :: {:ok, map()} | {:error, term()}
   def validate_key(key) when is_binary(key) do
     with {:ok, key_id, raw} <- parse_key(key),
          {:ok, conn} <- get_auth_conn(),
@@ -66,6 +68,7 @@ defmodule Mosaic.Auth.APIKey do
   end
 
   @doc "Revoke an API key by its key_id."
+  @spec revoke_key(String.t()) :: :ok
   def revoke_key(key_id) when is_binary(key_id) do
     with {:ok, conn} <- get_auth_conn() do
       Mosaic.DB.execute(conn,
@@ -77,6 +80,7 @@ defmodule Mosaic.Auth.APIKey do
   end
 
   @doc "List active keys for a tenant."
+  @spec list_keys(String.t()) :: {:ok, [map()]} | {:error, term()}
   def list_keys(tenant_id) when is_binary(tenant_id) do
     with {:ok, conn} <- get_auth_conn() do
       result = Mosaic.DB.query(conn,
@@ -103,6 +107,7 @@ defmodule Mosaic.Auth.APIKey do
   end
 
   @doc "Initialize the auth database."
+  @spec init_auth_db() :: :ok
   def init_auth_db do
     db_path = auth_db_path()
     File.mkdir_p!(Path.dirname(db_path))

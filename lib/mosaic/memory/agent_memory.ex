@@ -110,7 +110,7 @@ defmodule Mosaic.Memory.AgentMemory do
       end
 
       # Store compact stub for LLM efficiency
-      stub = HandleRegistry.store("mem_#{session_id}_#{memory_id}", [memory],
+      stub = HandleRegistry.store("$mem_#{session_id}_#{memory_id}", [memory],
         ttl: 86_400 * 30)
 
       Logger.debug("Memory stored: #{memory_id} (#{type}) in session #{session_id}")
@@ -170,7 +170,7 @@ defmodule Mosaic.Memory.AgentMemory do
     |> Enum.take(limit)
 
     # Store as handle for token efficiency
-    handle = HandleRegistry.store("recall_#{session_id}_#{sanitize(query)}", scored,
+    handle = HandleRegistry.store("$recall_#{session_id}_#{sanitize(query)}", scored,
       ttl: 3600)
 
     {:ok, scored, handle}
@@ -272,7 +272,7 @@ defmodule Mosaic.Memory.AgentMemory do
         "SELECT COUNT(*) FROM memories WHERE session_id = ? AND type = 'procedural' AND forgotten = 0", [session_id])
 
       {:ok, [[consolidated]]} = Mosaic.DB.query(conn,
-        "SELECT COUNT(*) FROM memories WHERE session_id = ? AND consolidated_from IS NOT NULL", [session_id])
+        "SELECT COUNT(*) FROM memories WHERE session_id = ? AND consolidation_of IS NOT NULL", [session_id])
 
       release_conn(conn)
 
@@ -300,6 +300,7 @@ defmodule Mosaic.Memory.AgentMemory do
   # ── Public: Called by AgentMemory ─────────────────────────
 
   def query_memories(query_text, session_id, opts) do
+    ensure_memory_db()
     embedding = Mosaic.EmbeddingService.encode(query_text)
     limit = Keyword.get(opts, :limit, 20)
     min_sim = Keyword.get(opts, :min_similarity, 0.1)
@@ -311,9 +312,9 @@ defmodule Mosaic.Memory.AgentMemory do
       embedding_json = Jason.encode!(embedding)
       session_clause = if session_id, do: "AND m.session_id = ?", else: ""
       params = if session_id do
-        [embedding_json, 1.0 - min_sim, session_id, limit]
+        [embedding_json, embedding_json, 1.0 - min_sim, session_id, limit]
       else
-        [embedding_json, 1.0 - min_sim, limit]
+        [embedding_json, embedding_json, 1.0 - min_sim, limit]
       end
 
       sql = """
@@ -355,8 +356,7 @@ defmodule Mosaic.Memory.AgentMemory do
     end)
 
     case result do
-      {:ok, {:ok, memories}} -> memories
-      {:ok, {:error, reason}} -> {:error, reason}
+      {:ok, memories} -> memories
       {:error, reason} -> {:error, reason}
     end
   end
@@ -364,9 +364,10 @@ defmodule Mosaic.Memory.AgentMemory do
   # ── Private ────────────────────────────────────────────────
 
   defp persist_memory(memory) do
+    ensure_memory_db()
     shard_path = memory_db_path()
 
-    case Mosaic.ConnectionPool.scoped_checkout(shard_path, fn conn ->
+    Mosaic.ConnectionPool.scoped_checkout(shard_path, fn conn ->
       # Insert into memories table
       Mosaic.DB.execute(conn, """
         INSERT OR REPLACE INTO memories (id, session_id, type, content, metadata, tags,
@@ -386,14 +387,11 @@ defmodule Mosaic.Memory.AgentMemory do
         [memory.id, embedding_json])
 
       {:ok, memory.id}
-    end) do
-      {:ok, {:ok, result}} -> {:ok, result}
-      {:ok, error} -> error
-      {:error, reason} -> {:error, reason}
-    end
+    end)
   end
 
   defp create_relations(source_id, target_ids, relation_type) do
+    ensure_memory_db()
     shard_path = memory_db_path()
     Mosaic.ConnectionPool.scoped_checkout(shard_path, fn conn ->
       Enum.each(target_ids, fn target_id ->
@@ -407,6 +405,7 @@ defmodule Mosaic.Memory.AgentMemory do
   end
 
   defp get_related_memories(memory_id, opts) do
+    ensure_memory_db()
     depth = Keyword.get(opts, :depth, 1)
     shard_path = memory_db_path()
 
@@ -439,13 +438,10 @@ defmodule Mosaic.Memory.AgentMemory do
         _ -> []
       end
     end)
-    |> case do
-      {:ok, result} -> result
-      _ -> []
-    end
   end
 
   defp get_episodic_memories(session_id, cutoff) do
+    ensure_memory_db()
     shard_path = memory_db_path()
     Mosaic.ConnectionPool.scoped_checkout(shard_path, fn conn ->
       sql = """
@@ -469,13 +465,10 @@ defmodule Mosaic.Memory.AgentMemory do
         err -> err
       end
     end)
-    |> case do
-      {:ok, result} -> result
-      error -> error
-    end
   end
 
   defp mark_consolidated(memory_id, consolidated_into_id) do
+    ensure_memory_db()
     shard_path = memory_db_path()
     Mosaic.ConnectionPool.scoped_checkout(shard_path, fn conn ->
       Mosaic.DB.execute(conn,
@@ -486,6 +479,7 @@ defmodule Mosaic.Memory.AgentMemory do
   end
 
   defp bump_access_count(memory_id) do
+    ensure_memory_db()
     shard_path = memory_db_path()
     Mosaic.ConnectionPool.scoped_checkout(shard_path, fn conn ->
       Mosaic.DB.execute(conn,
@@ -561,11 +555,15 @@ defmodule Mosaic.Memory.AgentMemory do
   end
 
   defp get_memory_conn do
+    ensure_memory_db()
+    Mosaic.ConnectionPool.checkout(memory_db_path())
+  end
+
+  defp ensure_memory_db do
     path = memory_db_path()
     File.mkdir_p!(Path.dirname(path))
     unless File.exists?(path), do: File.write!(path, "")
     ensure_schema()
-    Mosaic.ConnectionPool.checkout(path)
   end
 
   defp release_conn(conn) do

@@ -120,15 +120,18 @@ defmodule Mosaic.Config do
     api_max_body_size: 10_000_000
   }
 
+  @spec get(atom(), term()) :: term()
   def get(key, default \\ nil) do
     default = default || @defaults[key]
     Application.get_env(:mosaic, key, default)
   end
 
+  @spec get_all() :: keyword()
   def get_all do
     Application.get_env(:mosaic, [])
   end
 
+  @spec update_setting(atom(), term()) :: :ok
   def update_setting(key, value) do
     Application.put_env(:mosaic, key, value)
   end

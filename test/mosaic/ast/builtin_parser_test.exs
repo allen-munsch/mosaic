@@ -174,7 +174,7 @@ defmodule Mosaic.AST.BuiltinParserTest do
       }
       """
 
-      {:ok, %{nodes: nodes, _edges: _}} = BuiltinParser.parse(source, :rust)
+      {:ok, %{nodes: nodes, edges: _edges}} = BuiltinParser.parse(source, :rust)
 
       functions = Enum.filter(nodes, &(&1.type == "function"))
       structs = Enum.filter(nodes, &(&1.type == "struct"))
@@ -204,7 +204,7 @@ defmodule Mosaic.AST.BuiltinParserTest do
       }
       """
 
-      {:ok, %{nodes: nodes, _edges: _}} = BuiltinParser.parse(source, :go)
+      {:ok, %{nodes: nodes, edges: _edges}} = BuiltinParser.parse(source, :go)
 
       functions = Enum.filter(nodes, &(&1.type == "function"))
       assert length(functions) > 0
@@ -223,7 +223,7 @@ defmodule Mosaic.AST.BuiltinParserTest do
     test "parses an actual elixir file" do
       path = Path.join(File.cwd!(), "lib/mosaic/api.ex")
       if File.exists?(path) do
-        {:ok, %{nodes: nodes, _edges: _}} = BuiltinParser.parse_file(path)
+        {:ok, %{nodes: nodes, edges: _edges}} = BuiltinParser.parse_file(path)
         assert length(nodes) > 0
       end
     end

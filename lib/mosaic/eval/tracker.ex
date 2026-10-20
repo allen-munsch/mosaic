@@ -43,6 +43,7 @@ defmodule Mosaic.Eval.Tracker do
     - `:session_id` — agent session for grouping
     - `:metadata` — arbitrary map
   """
+  @spec track(atom(), keyword()) :: :ok | {:error, term()}
   def track(metric_type, attrs) when is_atom(metric_type) do
     query = Keyword.fetch!(attrs, :query)
     retrieved = Keyword.get(attrs, :retrieved, [])
@@ -89,6 +90,7 @@ defmodule Mosaic.Eval.Tracker do
     - `:since` — ISO8601 timestamp
     - `:k_values` — list of K values for precision/recall (default: [5, 10, 20])
   """
+  @spec report(atom(), keyword()) :: {:ok, map()} | {:error, term()}
   def report(metric_type, opts \\ []) when is_atom(metric_type) do
     window = Keyword.get(opts, :last, :day)
     k_values = Keyword.get(opts, :k_values, [5, 10, 20])
@@ -134,6 +136,8 @@ defmodule Mosaic.Eval.Tracker do
   Example thresholds:
       %{precision_at_5: 0.7, mrr: 0.6, recall_at_10: 0.8}
   """
+  @spec monitor(atom(), keyword()) ::
+          {:ok, :healthy, map()} | {:ok, :degraded, map()} | {:error, term()}
   def monitor(metric_type, opts) when is_atom(metric_type) do
     thresholds = Keyword.fetch!(opts, :alert_if)
 
@@ -160,6 +164,7 @@ defmodule Mosaic.Eval.Tracker do
   end
 
   @doc "Get raw evaluation events for analysis."
+  @spec events(atom(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def events(metric_type, opts \\ []) when is_atom(metric_type) do
     limit = Keyword.get(opts, :limit, 100)
     window = Keyword.get(opts, :last, :day)
@@ -198,7 +203,7 @@ defmodule Mosaic.Eval.Tracker do
     if events == [] do
       base = %{total_events: 0}
       k_metrics = Enum.flat_map(k_values, fn k ->
-        [{"precision_at_#{k}", nil}, {"recall_at_#{k}", nil}]
+        [{String.to_atom("precision_at_#{k}"), nil}, {String.to_atom("recall_at_#{k}"), nil}]
       end) |> Map.new()
       Map.merge(base, %{
         mrr: nil,
@@ -215,10 +220,10 @@ defmodule Mosaic.Eval.Tracker do
           precision = precision_at_k(event.retrieved, event.expected, k)
           recall = recall_at_k(event.retrieved, event.expected, k)
 
-          {"precision_at_#{k}", precision} &&
-          {"recall_at_#{k}", recall} && [
-            {"precision_at_#{k}", precision},
-            {"recall_at_#{k}", recall}
+          {String.to_atom("precision_at_#{k}"), precision} &&
+          {String.to_atom("recall_at_#{k}"), recall} && [
+            {String.to_atom("precision_at_#{k}"), precision},
+            {String.to_atom("recall_at_#{k}"), recall}
           ]
         end)
 
@@ -239,8 +244,8 @@ defmodule Mosaic.Eval.Tracker do
 
       k_metrics = Enum.map(k_values, fn k ->
         [
-          {"precision_at_#{k}", avg.(per_event, String.to_atom("precision_at_#{k}"))},
-          {"recall_at_#{k}", avg.(per_event, String.to_atom("recall_at_#{k}"))}
+          {String.to_atom("precision_at_#{k}"), avg.(per_event, String.to_atom("precision_at_#{k}"))},
+          {String.to_atom("recall_at_#{k}"), avg.(per_event, String.to_atom("recall_at_#{k}"))}
         ]
       end)
 

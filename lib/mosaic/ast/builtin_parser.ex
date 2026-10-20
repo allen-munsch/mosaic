@@ -36,13 +36,134 @@ defmodule Mosaic.AST.BuiltinParser do
     {nodes, edges}
   end
 
+  @doc "Detect the language of a source file from its extension."
+  def detect_language(path) when is_binary(path) do
+    case Path.extname(String.downcase(path)) do
+      ".ex" -> :elixir
+      ".exs" -> :elixir
+      ".heex" -> :elixir
+      ".py" -> :python
+      ".pyi" -> :python
+      ".js" -> :javascript
+      ".mjs" -> :javascript
+      ".jsx" -> :javascript
+      ".ts" -> :typescript
+      ".tsx" -> :typescript
+      ".rs" -> :rust
+      ".go" -> :go
+      ".rb" -> :ruby
+      ".java" -> :java
+      ".c" -> :c
+      ".h" -> :c
+      ".cpp" -> :cpp
+      ".cc" -> :cpp
+      ".cxx" -> :cpp
+      ".sql" -> :sql
+      ".sh" -> :bash
+      ".bash" -> :bash
+      ".yml" -> :yaml
+      ".yaml" -> :yaml
+      ".json" -> :json
+      ".md" -> :markdown
+      ".markdown" -> :markdown
+      _ -> :unknown
+    end
+  end
+
+  @doc "Parse source text in the given language into a symbol graph."
+  def parse(source, language) when is_binary(source) do
+    file_path = "<memory>"
+
+    {nodes, edges} =
+      case language do
+        :elixir -> extract_elixir(source, file_path)
+        :python -> extract_python(source, file_path)
+        :javascript -> extract_javascript(source, file_path)
+        :typescript -> extract_javascript(source, file_path)
+        :rust -> extract_rust(source, file_path)
+        :go -> extract_go(source, file_path)
+        _ -> {[], []}
+      end
+
+    {:ok, %{nodes: nodes, edges: edges}}
+  end
+
+  @doc "Detect a file's language and parse its contents."
+  def parse_file(path) when is_binary(path) do
+    case File.read(path) do
+      {:ok, source} -> parse(source, detect_language(path))
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp extract_javascript(source, file_path) do
+    lines = String.split(source, "\n")
+
+    spec = [
+      {~r/^\s*class\s+(\w+)/, "class"},
+      {~r/^\s*(?:async\s+)?function\s+(\w+)/, "function"},
+      {~r/^\s*(?:const|let|var)\s+(\w+)\s*=\s*.*=>/, "function"}
+    ]
+
+    {scan_symbols(lines, file_path, "javascript", spec), []}
+  end
+
+  defp extract_rust(source, file_path) do
+    lines = String.split(source, "\n")
+
+    spec = [
+      {~r/^\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/, "function"},
+      {~r/^\s*(?:pub\s+)?struct\s+(\w+)/, "struct"},
+      {~r/^\s*(?:pub\s+)?trait\s+(\w+)/, "trait"}
+    ]
+
+    {scan_symbols(lines, file_path, "rust", spec), []}
+  end
+
+  defp extract_go(source, file_path) do
+    lines = String.split(source, "\n")
+
+    spec = [
+      {~r/^\s*func\s+(?:\([^)]*\)\s+)?(\w+)/, "function"},
+      {~r/^\s*type\s+(\w+)\s+struct\s*\{/, "struct"},
+      {~r/^\s*type\s+(\w+)\s+interface\s*\{/, "interface"}
+    ]
+
+    {scan_symbols(lines, file_path, "go", spec), []}
+  end
+
+  defp scan_symbols(lines, file_path, language, spec) do
+    lines
+    |> Enum.with_index(1)
+    |> Enum.flat_map(fn {line, lineno} ->
+      Enum.flat_map(spec, fn {regex, type} ->
+        case Regex.run(regex, line) do
+          [_, name] ->
+            [%{
+              id: "#{file_path}:#{name}:#{lineno}",
+              name: name,
+              type: type,
+              language: language,
+              file_path: file_path,
+              start_line: lineno,
+              end_line: lineno,
+              source_text: String.trim(line),
+              parent_id: nil,
+              properties: %{}
+            }]
+          nil -> []
+        end
+      end)
+    end)
+  end
+
   # ── Elixir Extractors ──────────────────────────────────────────
 
   defp extract_elixir_modules(lines, file_path) do
     lines
     |> Enum.with_index(1)
     |> Enum.flat_map(fn {line, lineno} ->
-      case Regex.run(~r/^\s*defmodule\s+([A-Z][A-Za-z0-9_.]+)\s+do/, line) do
+      case Regex.run(~r/^\s*defmodule\s+([A-Z][A-Za-z0-9_.]*)\s+do/, line) do
         [_, name] ->
           [%{
             id: "#{file_path}:#{name}:#{lineno}",
@@ -226,7 +347,7 @@ defmodule Mosaic.AST.BuiltinParser do
     |> Enum.take(lineno - 1)
     |> Enum.reverse()
     |> Enum.find_value(fn {line, _idx} ->
-      case Regex.run(~r/^\s*defmodule\s+([A-Z][A-Za-z0-9_.]+)\s+do/, line) do
+      case Regex.run(~r/^\s*defmodule\s+([A-Z][A-Za-z0-9_.]*)\s+do/, line) do
         [_, name] -> Map.get(module_map, name)
         nil -> nil
       end

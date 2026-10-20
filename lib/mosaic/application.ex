@@ -73,7 +73,10 @@ defmodule Mosaic.Application do
       children
     end
 
-    # Auth & Multi-tenancy initialization
+    configure_nx_backend()
+    {:ok, supervisor} = Supervisor.start_link(children, strategy: :one_for_one, name: Mosaic.Supervisor)
+
+    # Auth & Multi-tenancy initialization (requires ConnectionPool)
     if Mosaic.Config.get(:auth_enabled) or Mosaic.Config.get(:tenancy_enabled) do
       Mosaic.Auth.APIKey.init_auth_db()
       Mosaic.Tenancy.Isolator.init_system()
@@ -84,13 +87,12 @@ defmodule Mosaic.Application do
       Mosaic.Consensus.Cluster.start_cluster()
     end
 
-    # Run pending database migrations
+    # Run pending database migrations (requires ConnectionPool)
     if Mosaic.Config.get(:auto_migrate, true) do
       run_pending_migrations()
     end
 
-    configure_nx_backend()
-    Supervisor.start_link(children, strategy: :one_for_one, name: Mosaic.Supervisor)
+    {:ok, supervisor}
   end
 
   defp run_pending_migrations do

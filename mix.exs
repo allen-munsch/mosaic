@@ -29,20 +29,22 @@ defmodule Mosaic.MixProject do
 
   defp deps do
     [
-      {:exqlite, "~> 0.13"},
-      {:req, "~> 0.4"},
-      {:plug_cowboy, "2.7.5"},
-      {:plug, "~> 1.15"},
+      {:exqlite, "~> 0.42.0"},
+      {:req, "~> 0.7.5"},
+      {:plug_cowboy, "~> 2.9"},
+      {:plug, "~> 1.20"},
       {:jason, "~> 1.4"},
-      {:libcluster, "~> 3.0"},
+      {:libcluster, "~> 3.5"},
       {:sqlite_vec, "~> 0.1.0"},
-      {:bumblebee, "~> 0.1"},
-      {:exla, "~> 0.10.0"},
-      {:mox, "~> 1.0", only: :test},
-      {:redix, "~> 1.0"},
+      {:bumblebee, "~> 0.7.1"},
+      {:exla, "~> 0.13.1"},
+      {:mox, "~> 1.3", only: :test},
+      {:redix, "~> 1.9"},
       {:poolboy, "~> 1.5"},
-      {:duckdbex, "~> 0.3.18"},
-      {:ra, "~> 2.11"}
+      {:duckdbex, "~> 0.5.2"},
+      {:joken, "~> 2.7"},
+      {:bcrypt_elixir, "~> 3.3"},
+      {:ra, "~> 3.2"}
     ]
   end
 

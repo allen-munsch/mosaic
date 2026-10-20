@@ -285,6 +285,9 @@ defmodule Mosaic.Prompts.Registry do
       release_conn(conn)
 
       case result do
+        {:ok, []} ->
+          {:error, :not_found}
+
         {:ok, rows} ->
           versions = Enum.map(rows, fn [ver, template, vars_json, model, tags_json, created_at, is_active] ->
             %{
@@ -299,7 +302,6 @@ defmodule Mosaic.Prompts.Registry do
           end)
           {:ok, versions}
 
-        {:ok, []} -> {:error, :not_found}
         err -> err
       end
     end
@@ -345,8 +347,8 @@ defmodule Mosaic.Prompts.Registry do
   defp deactivate_others(name, active_version) do
     with {:ok, conn} <- get_conn() do
       Mosaic.DB.execute(conn,
-        "UPDATE prompts SET is_active = 0 WHERE name = ? AND version != ?",
-        [name, active_version])
+        "UPDATE prompts SET is_active = CASE WHEN version = ? THEN 1 ELSE 0 END WHERE name = ?",
+        [active_version, name])
       release_conn(conn)
       :ok
     end

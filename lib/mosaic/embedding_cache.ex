@@ -3,13 +3,22 @@ defmodule Mosaic.EmbeddingCache do
 
 
   defmodule State do
+    @type t :: %__MODULE__{
+            cache: map(),
+            lru_queue: :queue.queue(),
+            max_size: pos_integer(),
+            cache_hits: non_neg_integer(),
+            cache_misses: non_neg_integer()
+          }
     defstruct [:cache, :lru_queue, :max_size, :cache_hits, :cache_misses]
   end
 
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
+  @spec init(keyword()) :: {:ok, State.t()}
   def init(_opts) do
     max_size = Mosaic.Config.get(:embedding_cache_max_size)
     state = %State{
@@ -23,9 +32,16 @@ defmodule Mosaic.EmbeddingCache do
     {:ok, state}
   end
 
+  @spec get(String.t()) :: {:ok, [float()]} | :miss
   def get(text), do: GenServer.call(__MODULE__, {:get, text})
+
+  @spec put(String.t(), [float()]) :: :ok
   def put(text, embedding), do: GenServer.cast(__MODULE__, {:put, text, embedding})
+
+  @spec get_metrics() :: %{hits: non_neg_integer(), misses: non_neg_integer()}
   def get_metrics(), do: GenServer.call(__MODULE__, :get_metrics)
+
+  @spec reset_state() :: :ok
   def reset_state(), do: GenServer.call(__MODULE__, :reset_state)
 
   def handle_call({:get, text}, _from, state) do

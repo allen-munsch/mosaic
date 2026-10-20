@@ -370,7 +370,7 @@ defmodule Mosaic.Pipelines.AgentPipeline do
         VALUES (?, ?, ?, ?, ?)
       """, [
         Atom.to_string(pipeline.name), pipeline.version,
-        Jason.encode!(pipeline.steps), Jason.encode!(pipeline.tags),
+        encode_steps(pipeline.steps), Jason.encode!(pipeline.tags),
         Jason.encode!(pipeline.metadata)
       ])
       release_conn(conn)
@@ -471,11 +471,17 @@ defmodule Mosaic.Pipelines.AgentPipeline do
     end)
   end
 
+  defp encode_steps(steps) do
+    Jason.encode!(Enum.map(steps, fn {type, config} ->
+      [Atom.to_string(type), Map.new(config)]
+    end))
+  end
+
   defp safe_decode_steps(nil), do: []
   defp safe_decode_steps(json) when is_binary(json) do
-    case Jason.decode(json) do
+    case Jason.decode(json, keys: :atoms) do
       {:ok, list} when is_list(list) ->
-        Enum.map(list, fn [type, config] -> {String.to_atom(type), config} end)
+        Enum.map(list, fn [type, config] -> {String.to_atom(type), Map.to_list(config)} end)
       _ -> []
     end
   end

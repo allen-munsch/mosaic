@@ -27,6 +27,7 @@ defmodule Mosaic.AST.SymbolExtractor do
       properties: %{visibility: "public"}
     }
   """
+  @spec extract(term(), String.t(), atom()) :: [map()]
   def extract(ast_json, file_path, language) do
     mappings = language_mappings(language)
     extract_from_node(ast_json, file_path, language, nil, mappings)

@@ -23,6 +23,7 @@ defmodule Mosaic.API.RateLimiter do
   @cleanup_interval_ms 60_000
 
   @doc false
+  @spec init(keyword()) :: %{rate: pos_integer(), burst: pos_integer()}
   def init(opts) do
     rate = Keyword.get(opts, :rate, Mosaic.Config.get(:api_rate_limit_per_minute, 1000))
     burst = Keyword.get(opts, :burst, rate * 2)
@@ -30,6 +31,7 @@ defmodule Mosaic.API.RateLimiter do
   end
 
   @doc false
+  @spec call(Plug.Conn.t(), %{rate: pos_integer(), burst: pos_integer()}) :: Plug.Conn.t()
   def call(conn, %{rate: rate, burst: burst}) do
     ensure_table()
 
@@ -55,6 +57,7 @@ defmodule Mosaic.API.RateLimiter do
   Check if a specific key (tenant, IP, or custom) is allowed to make a request.
   Returns `true` or `false`.
   """
+  @spec allow_request?(String.t(), pos_integer(), pos_integer() | nil) :: boolean()
   def allow_request?(key, rate_per_minute, burst_size \\ nil) when is_binary(key) do
     burst = burst_size || rate_per_minute * 2
     ensure_table()
@@ -84,6 +87,7 @@ defmodule Mosaic.API.RateLimiter do
   @doc """
   Get current token count for a bucket (for monitoring).
   """
+  @spec bucket_status(String.t()) :: map()
   def bucket_status(key) when is_binary(key) do
     ensure_table()
     case :ets.lookup(@table_name, key) do
@@ -100,6 +104,7 @@ defmodule Mosaic.API.RateLimiter do
   end
 
   @doc "List all active rate limit buckets (for admin/monitoring)."
+  @spec active_buckets(non_neg_integer()) :: [map()]
   def active_buckets(limit \\ 100) do
     ensure_table()
     :ets.tab2list(@table_name)
@@ -108,6 +113,7 @@ defmodule Mosaic.API.RateLimiter do
   end
 
   @doc "Reset all rate limit buckets."
+  @spec reset() :: :ok
   def reset do
     ensure_table()
     :ets.delete_all_objects(@table_name)
@@ -115,6 +121,7 @@ defmodule Mosaic.API.RateLimiter do
   end
 
   @doc "Reset bucket for a specific key."
+  @spec reset_key(String.t()) :: :ok
   def reset_key(key) when is_binary(key) do
     ensure_table()
     :ets.delete(@table_name, key)
