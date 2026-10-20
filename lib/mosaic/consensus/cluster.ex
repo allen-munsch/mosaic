@@ -31,18 +31,25 @@ defmodule Mosaic.Consensus.Cluster do
       shards = Mosaic.Consensus.Cluster.list_shards()
   """
 
+  @system :default
   @cluster_name :mosaic_consensus
 
   # ── Public API ─────────────────────────────────────────────
 
   @doc "Start the Raft cluster on this node."
   def start_cluster(_opts \\ []) do
+    with :ok <- ensure_ra_started() do
+      start_cluster_for_peers()
+    end
+  end
+
+  defp start_cluster_for_peers do
     case Mosaic.Config.get(:cluster_peers) do
       peers when is_list(peers) and length(peers) > 0 ->
         if List.first(peers) == node() do
-          case :ra.start_cluster(default_config()) do
+          case :ra.start_cluster(@system, @cluster_name, machine_conf(), server_ids(peers)) do
             {:ok, _, _} -> :ok
-            {:error, :cluster_already_exists} -> join_existing()
+            {:error, :cluster_not_formed} -> join_existing()
             other -> other
           end
         else
@@ -50,8 +57,9 @@ defmodule Mosaic.Consensus.Cluster do
         end
 
       _ ->
-        case :ra.start_server(default_config()) do
-          {:ok, _, _} -> :ok
+        case :ra.start_server(@system, server_config()) do
+          :ok -> :ok
+          {:error, {:already_started, _}} -> :ok
           other -> other
         end
     end
@@ -59,12 +67,20 @@ defmodule Mosaic.Consensus.Cluster do
 
   @doc "Join an existing Raft cluster."
   def join_existing do
-    case :ra.start_server(default_config()) do
-      {:ok, _, _} ->
+    with :ok <- ensure_ra_started() do
+      do_join_existing()
+    end
+  end
+
+  defp do_join_existing do
+    case :ra.start_server(@system, server_config()) do
+      :ok ->
         # Trigger membership if there are peers
         peers = configured_peers()
         Enum.each(peers, fn peer ->
-          :ra.add_member(@cluster_name, peer)
+          if peer != node() do
+            :ra.add_member(server_id(), {@cluster_name, peer})
+          end
         end)
         :ok
 
@@ -75,7 +91,7 @@ defmodule Mosaic.Consensus.Cluster do
 
   @doc "Write a configuration value (strongly consistent)."
   def write_config(key, value) when is_binary(key) do
-    case :ra.process_command(@cluster_name, {:write, key, value}) do
+    case :ra.process_command(server_id(), {:write, key, value}) do
       {:ok, _, _} -> :ok
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
@@ -86,7 +102,7 @@ defmodule Mosaic.Consensus.Cluster do
   @doc "Read a configuration value (strongly consistent)."
   def read_config(key) when is_binary(key) do
     # Use consistent query for strong reads
-    case :ra.consistent_query(@cluster_name, fn state ->
+    case :ra.consistent_query(server_id(), fn state ->
       Map.get(state, key)
     end) do
       {:ok, value, _} -> {:ok, value}
@@ -136,8 +152,8 @@ defmodule Mosaic.Consensus.Cluster do
 
   @doc "Get the current cluster leader."
   def leader do
-    case :ra.leader(@cluster_name) do
-      {:ok, pid, _} -> {:ok, pid}
+    case :ra.consistent_query(server_id(), fn _ -> :ok end) do
+      {:ok, _, leader} -> {:ok, leader}
       other -> other
     end
   end
@@ -145,14 +161,14 @@ defmodule Mosaic.Consensus.Cluster do
   @doc "Check if this node is the leader."
   def leader? do
     case leader() do
-      {:ok, pid} -> pid == :ra.whereis(@cluster_name)
+      {:ok, {_name, leader_node}} -> leader_node == node()
       _ -> false
     end
   end
 
   @doc "Get cluster members."
   def members do
-    case :ra.members(@cluster_name) do
+    case :ra.members(server_id()) do
       {:ok, members, _} -> {:ok, members}
       other -> other
     end
@@ -165,23 +181,68 @@ defmodule Mosaic.Consensus.Cluster do
 
   @doc false
   def apply(_meta, {:write, key, value}, state) do
-    {state, Map.put(state, key, value), :no_reply}
+    {Map.put(state, key, value), :ok, []}
   end
 
   @doc false
   def apply(_meta, {:delete, key}, state) do
-    {state, Map.delete(state, key), :no_reply}
+    {Map.delete(state, key), :ok, []}
   end
 
   # ── Private ────────────────────────────────────────────────
 
-  defp default_config do
+  defp ensure_ra_started do
+    case Application.ensure_all_started(:ra) do
+      {:ok, _} -> ensure_default_system()
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp ensure_default_system do
+    case :ra_system.fetch(@system) do
+      :undefined ->
+        case :ra_system.start_default() do
+          {:ok, _} -> :ok
+          {:error, {:already_started, _}} -> :ok
+          {:error, :already_present} -> :ok
+          other -> other
+        end
+
+      _config ->
+        :ok
+    end
+  end
+
+  defp machine_conf do
+    {:module, __MODULE__, %{}}
+  end
+
+  defp server_config do
+    id = server_id()
+    uid = uid()
+
     %{
+      id: id,
+      uid: uid,
       cluster_name: @cluster_name,
-      machine: {__MODULE__, %{}},
-      initial_members: configured_peers(),
-      log_init_args: %{}
+      log_init_args: %{uid: uid},
+      initial_members: server_ids(configured_peers()),
+      machine: machine_conf()
     }
+  end
+
+  defp server_id do
+    {@cluster_name, node()}
+  end
+
+  defp server_ids(nodes) do
+    Enum.map(nodes, &{@cluster_name, &1})
+  end
+
+  # Stable across restarts so the server can recover its persisted log.
+  defp uid do
+    digest = :crypto.hash(:sha256, "#{@cluster_name}:#{node()}")
+    Base.url_encode64(digest, padding: false)
   end
 
   defp configured_peers do
